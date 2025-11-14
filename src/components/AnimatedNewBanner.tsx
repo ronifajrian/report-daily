@@ -25,7 +25,7 @@ export default function AnimatedNewBanner({ count, onClick }: Props) {
           {count}
         </span>
         <div className="text-sm font-medium text-foreground">
-          {count} new report{count > 1 ? 's' : ''}
+          new report{count > 1 ? 's' : ''}
         </div>
         <div className="text-xs text-muted-foreground ml-2">Tap to view</div>
       </div>
