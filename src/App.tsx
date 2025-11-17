@@ -9,7 +9,6 @@ import { AuthProvider } from "@/hooks/useAuth";
 import ProtectedRoute from "@/components/ProtectedRoute";
 import MaintenanceCheck from "@/components/MaintenanceCheck";
 import { DashboardLayout } from "@/components/layout/DashboardLayout";
-import ReportDetail from "./components/dashboard/ReportDetail";
 import ExportReports from "./pages/ExportReports";
 import NotFound from "./pages/NotFound";
 

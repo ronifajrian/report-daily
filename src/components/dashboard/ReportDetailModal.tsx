@@ -32,6 +32,7 @@ import { uploadFileToWorker, deleteFileFromWorker } from "@/lib/upload";
 import { fileServeUrl } from "@/lib/storage";
 import { Sheet, SheetContent, SheetTitle, SheetDescription } from "@/components/ui/sheet";
 import { VisuallyHidden } from "@radix-ui/react-visually-hidden";
+import { ReportDetailSkeleton } from "./ReportDetailSkeleton";
 
 interface ReportFile {
   id: string;
@@ -390,11 +391,9 @@ export const ReportDetailModal = ({ reportId, open, onClose, onReportUpdated }: 
             </SheetDescription>
             </VisuallyHidden>
 
-          {loading ? (
-            <div className="flex items-center justify-center h-screen">
-              <Loader2 className="h-8 w-8 animate-spin text-primary" />
-            </div>
-          ) : !report ? (
+            {loading ? (
+            <ReportDetailSkeleton />
+            ) : !report ? (
             <div className="flex items-center justify-center h-screen">
               <p className="text-muted-foreground">Report not found</p>
             </div>

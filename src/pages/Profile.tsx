@@ -11,6 +11,7 @@ import { Label } from '@/components/ui/label';
 import { Separator } from '@/components/ui/separator';
 import { Loader2, User, Lock, LogOut } from 'lucide-react';
 import { z } from 'zod';
+import { ProfileSkeleton } from '@/components/SkeletonProfile'; 
 
 const profileSchema = z.object({
   full_name: z.string().min(1, { message: 'Full name is required' }).max(100),
@@ -194,11 +195,7 @@ const Profile = () => {
   };
 
   if (authLoading || profileLoading) {
-    return (
-      <div className="min-h-screen flex items-center justify-center bg-background">
-        <Loader2 className="h-8 w-8 animate-spin text-primary" />
-      </div>
-    );
+    return <ProfileSkeleton />;
   }
 
   if (!user) {
