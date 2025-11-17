@@ -94,7 +94,7 @@ const App = () => (
                   </ProtectedRoute>
                 }
               />
-              <Route
+              {/* <Route
                 path="/report/:id"
                 element={
                   <ProtectedRoute>
@@ -105,7 +105,7 @@ const App = () => (
                     </MaintenanceCheck>
                   </ProtectedRoute>
                 }
-              />
+              /> */}
 
               <Route 
                 path="/export-reports" 

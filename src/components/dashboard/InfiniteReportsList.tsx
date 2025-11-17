@@ -2,7 +2,6 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
 import { Report } from './StaffDashboard';
 import { ReportCard } from './ReportCard';
-import { useNavigate } from 'react-router-dom';
 import { Loader2 } from 'lucide-react';
 import { supabase } from '@/integrations/supabase/client';
 import type { RealtimeChannel } from '@supabase/supabase-js';
@@ -11,16 +10,16 @@ import type { DateRange } from 'react-day-picker';
 import { AnimatePresence, motion } from 'framer-motion';
 import AnimatedNewBanner from '@/components/AnimatedNewBanner';
 import SkeletonReportCard from '@/components/SkeletonReportCard';
+import { ReportDetailModal } from './ReportDetailModal';
 
 interface InfiniteReportsListProps {
-  userId?: string; // staff id for staff view
+  userId?: string;
   showAuthor?: boolean;
   allUsers?: Array<{ id: string; full_name: string }>;
   userRole?: 'staff' | 'approver' | 'admin';
 }
 
 export const InfiniteReportsList = ({ userId, showAuthor = false, userRole }: InfiniteReportsListProps) => {
-  const navigate = useNavigate();
   const { toast } = useToast();
 
   // visible state
@@ -51,10 +50,14 @@ export const InfiniteReportsList = ({ userId, showAuthor = false, userRole }: In
   const [showNewBanner, setShowNewBanner] = useState(false);
   const latestTimestampRef = useRef<string | null>(null);
 
-  // listener bookkeeping (store RealtimeChannel object)
+  // listener bookkeeping
   const reportsUpdatesListenerRef = useRef<RealtimeChannel | null>(null);
   const realtimeChannelRef = useRef<string | null>(null);
   const realtimeFilterRef = useRef<any | undefined>(undefined);
+
+  // Modal state
+  const [selectedReportId, setSelectedReportId] = useState<string | null>(null);
+  const [detailModalOpen, setDetailModalOpen] = useState(false);
 
   // sync refs with state
   useEffect(() => { reportsRef.current = reports; }, [reports]);
@@ -111,19 +114,16 @@ export const InfiniteReportsList = ({ userId, showAuthor = false, userRole }: In
             setHasMore(false);
             hasMoreRef.current = false;
           } else {
-            // duplicates-only -> advance page to avoid stuck loop
             setPage(prev => prev + 1);
             pageRef.current = pageRef.current + 1;
           }
         }
       }
 
-      // server hasMore
       const serverHasMore = !!result.hasMore;
       setHasMore(serverHasMore);
       hasMoreRef.current = serverHasMore;
 
-      // update latestTimestamp after initial or reset
       if ((reset || pageNum === 1) && incoming.length > 0) {
         latestTimestampRef.current = incoming[0].created_at;
       }
@@ -169,8 +169,7 @@ export const InfiniteReportsList = ({ userId, showAuthor = false, userRole }: In
     setShowNewBanner(false);
 
     fetchReports(1, true);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [statusFilter, userFilter, dateRange, userId, searchQuery]);
+  }, [statusFilter, userFilter, dateRange, userId, searchQuery, fetchReports]);
 
   // ---------------- IntersectionObserver (pause/resume) ----------------
   useEffect(() => {
@@ -187,7 +186,6 @@ export const InfiniteReportsList = ({ userId, showAuthor = false, userRole }: In
         const nextPage = pageRef.current + 1;
         await fetchReports(nextPage, false);
 
-        // re-attach after short delay if still has more
         setTimeout(() => {
           if (!cancelled && observer && observerTarget.current && hasMoreRef.current) {
             try { observer.observe(observerTarget.current); } catch (_) {}
@@ -215,7 +213,6 @@ export const InfiniteReportsList = ({ userId, showAuthor = false, userRole }: In
     realtimeChannelRef.current = channelName;
     realtimeFilterRef.current = filterStr;
 
-    // create channel
     const chan = supabase.channel(channelName);
 
     const onInsert = (payload: any) => {
@@ -259,7 +256,6 @@ export const InfiniteReportsList = ({ userId, showAuthor = false, userRole }: In
 
   // ------------- PREPEND with pixel-perfect preserve -------------
   const onClickShowNew = useCallback(async () => {
-    // find first visible report element and its offset from viewport top
     const children = Array.from(reportsContainerRef.current?.children ?? []) as HTMLElement[];
     let firstVisibleEl: HTMLElement | null = null;
     for (const el of children) {
@@ -292,7 +288,6 @@ export const InfiniteReportsList = ({ userId, showAuthor = false, userRole }: In
         return;
       }
 
-      // PREPEND but preserve viewport exactly by restoring position of firstVisibleId
       setReports(prev => {
         const existing = new Set(prev.map(r => r.id));
         const filtered = newItems.filter(i => !existing.has(i.id));
@@ -301,12 +296,10 @@ export const InfiniteReportsList = ({ userId, showAuthor = false, userRole }: In
         return merged;
       });
 
-      // clear buffer/banner
       newReportsBufferRef.current = [];
       setShowNewBanner(false);
       setNewCount(0);
 
-      // After DOM updated, find the same element and adjust scroll so its top equals previous top
       requestAnimationFrame(() => {
         if (firstVisibleId && firstVisibleTop != null) {
           const newChildren = Array.from(reportsContainerRef.current?.children ?? []) as HTMLElement[];
@@ -318,13 +311,11 @@ export const InfiniteReportsList = ({ userId, showAuthor = false, userRole }: In
             return;
           }
         }
-        // fallback: measure height delta
         const newHeight = reportsContainerRef.current?.scrollHeight ?? document.body.scrollHeight;
         const added = newHeight - prevHeight;
         window.scrollTo(0, prevScroll + added);
       });
     } catch (e) {
-      // fallback: prepend buffer items naively
       const fallback = newReportsBufferRef.current.slice();
       if (fallback.length > 0) {
         setReports(prev => {
@@ -341,71 +332,95 @@ export const InfiniteReportsList = ({ userId, showAuthor = false, userRole }: In
     }
   }, [fetchReportsSince]);
 
-  // handle click navigations
+  // handle report click - open modal
   const handleReportClick = useCallback((reportId: string) => {
-    navigate(`/report/${reportId}`);
-  }, [navigate]);
+    setSelectedReportId(reportId);
+    setDetailModalOpen(true);
+  }, []);
+
+  // handle close modal
+  const handleCloseDetailModal = useCallback(() => {
+    setDetailModalOpen(false);
+    // Delay clearing reportId to allow modal close animation
+    setTimeout(() => setSelectedReportId(null), 300);
+  }, []);
+
+  // handle report updated
+  const handleReportUpdated = useCallback(() => {
+    // Refresh current page to show updates
+    fetchReports(1, true);
+  }, [fetchReports]);
 
   // ---------------- render ----------------
   return (
-    <div className="w-full">
-      <AnimatePresence>
-        {showNewBanner && newCount > 0 && (
-          <motion.div
-            key="new-banner"
-            initial={{ y: -18, opacity: 0, scale: 0.98 }}
-            animate={{ y: 0, opacity: 1, scale: 1 }}
-            exit={{ y: -18, opacity: 0, scale: 0.98 }}
-            transition={{ type: 'spring', stiffness: 300, damping: 25 }}
-            className="sticky top-3 z-30"
-          >
-            <AnimatedNewBanner count={newCount} onClick={onClickShowNew} />
-          </motion.div>
-        )}
-      </AnimatePresence>
-
-      <div ref={reportsContainerRef}>
-        {/* initial / page load skeletons */}
-        {reports.length === 0 && loading && (
-          <div className="space-y-3 px-2">
-            <SkeletonReportCard />
-            <SkeletonReportCard />
-            <SkeletonReportCard />
-          </div>
-        )}
-
-        <div className="space-y-3 px-2">
-          <AnimatePresence initial={false}>
-            {reports.map((r, idx) => (
-              <motion.div
-                key={r.id}
-                layout
-                initial={{ opacity: 0, y: 6 }}
-                animate={{ opacity: 1, y: 0 }}
-                exit={{ opacity: 0, y: -6 }}
-                transition={{ duration: 0.22, delay: idx * 0.01 }}
-              >
-                <div data-report-id={r.id} className="rounded-2xl">
-                  <ReportCard report={r} onClick={() => handleReportClick(r.id)} showAuthor={showAuthor} />
-                </div>
-              </motion.div>
-            ))}
-          </AnimatePresence>
-        </div>
-
-        {/* sentinel after list */}
-        <div ref={observerTarget} style={{ height: 1, width: '100%' }} />
-
-        <div className="py-4 text-center">
-          {loading && <Loader2 className="inline-block animate-spin" />}
-          {!hasMore && reports.length > 0 && (
-            <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="text-sm text-muted-foreground">
-              No more reports
+    <>
+      <div className="w-full">
+        <AnimatePresence>
+          {showNewBanner && newCount > 0 && (
+            <motion.div
+              key="new-banner"
+              initial={{ y: -18, opacity: 0, scale: 0.98 }}
+              animate={{ y: 0, opacity: 1, scale: 1 }}
+              exit={{ y: -18, opacity: 0, scale: 0.98 }}
+              transition={{ type: 'spring', stiffness: 300, damping: 25 }}
+              className="sticky top-3 z-30"
+            >
+              <AnimatedNewBanner count={newCount} onClick={onClickShowNew} />
             </motion.div>
           )}
+        </AnimatePresence>
+
+        <div ref={reportsContainerRef}>
+          {/* initial / page load skeletons */}
+          {reports.length === 0 && loading && (
+            <div className="space-y-3 px-2">
+              <SkeletonReportCard />
+              <SkeletonReportCard />
+              <SkeletonReportCard />
+            </div>
+          )}
+
+          <div className="space-y-3 px-2">
+            <AnimatePresence initial={false}>
+              {reports.map((r, idx) => (
+                <motion.div
+                  key={r.id}
+                  layout
+                  initial={{ opacity: 0, y: 6 }}
+                  animate={{ opacity: 1, y: 0 }}
+                  exit={{ opacity: 0, y: -6 }}
+                  transition={{ duration: 0.22, delay: idx * 0.01 }}
+                >
+                  <div data-report-id={r.id} className="rounded-2xl">
+                    <ReportCard report={r} onClick={() => handleReportClick(r.id)} showAuthor={showAuthor} />
+                  </div>
+                </motion.div>
+              ))}
+            </AnimatePresence>
+          </div>
+
+          {/* sentinel after list */}
+          <div ref={observerTarget} style={{ height: 1, width: '100%' }} />
+
+          <div className="py-4 text-center">
+            {loading && <Loader2 className="inline-block animate-spin" />}
+            {!hasMore && reports.length > 0 && (
+              <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="text-sm text-muted-foreground">
+                No more reports
+              </motion.div>
+            )}
+          </div>
         </div>
       </div>
-    </div>
+
+      {/* Report Detail Modal - Twitter-style fullscreen */}
+      <ReportDetailModal
+        reportId={selectedReportId}
+        open={detailModalOpen}
+        onClose={handleCloseDetailModal}
+        onReportUpdated={handleReportUpdated}
+      />
+    </>
   );
 };
 

@@ -1,6 +1,6 @@
 // src/components/AttachmentCarouselPreview.tsx
 import { useState, useEffect } from 'react';
-import { Dialog, DialogContent, DialogTitle } from '@/components/ui/dialog';
+import { Dialog, DialogContent, DialogTitle, DialogDescription } from '@/components/ui/dialog';
 import { VisuallyHidden } from '@radix-ui/react-visually-hidden';
 import { Button } from '@/components/ui/button';
 import {
@@ -53,9 +53,34 @@ export const AttachmentCarouselPreview = ({
 
   useEffect(() => {
     if (!api) return;
+
+    // scroll ke index awal
     api.scrollTo(initialIndex);
     setCurrentIndex(initialIndex);
-    api.on('select', () => setCurrentIndex(api.selectedScrollSnap()));
+
+    // handler yang akan di-unsubscribe nanti
+    const handler = () => {
+      try {
+        setCurrentIndex(api.selectedScrollSnap());
+      } catch {
+        // guard jika api berubah/invalid saat handler dipanggil
+      }
+    };
+
+    // register
+    api.on('select', handler);
+
+    // cleanup harus mengembalikan fungsi yang tidak mengembalikan value (void)
+    return () => {
+      // safe-check bila api.off tidak tersedia
+      try {
+        // kalau library menyediakan `off`
+        (api as any).off?.('select', handler);
+        // atau kalau `on` mengembalikan unsubscribe, panggil itu instead.
+      } catch {
+        // ignore
+      }
+    };
   }, [api, initialIndex]);
 
   useEffect(() => {
@@ -224,11 +249,17 @@ export const AttachmentCarouselPreview = ({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="max-w-full w-screen h-screen p-0 bg-black/95 border-none [&>button]:hidden">
-        {/* ✅ Aksesibilitas Radix: sembunyikan visual tapi tetap ada untuk screen reader */}
-        <VisuallyHidden>
-          <DialogTitle>Attachment preview</DialogTitle>
-        </VisuallyHidden>
+      <DialogContent
+        aria-describedby="attachment-preview-desc"
+        className="max-w-full w-screen h-screen p-0 bg-black/95 border-none [&>button]:hidden"
+      >
+        {/* Make Title/Description direct children (sr-only) so Radix runtime will detect them reliably */}
+        <DialogTitle id="attachment-preview-title" className="sr-only">
+          Attachment preview
+        </DialogTitle>
+        <DialogDescription id="attachment-preview-desc" className="sr-only">
+          Preview lampiran dalam tampilan layar penuh. Tekan Escape untuk menutup.
+        </DialogDescription>
 
         <div className="relative h-full flex flex-col w-full">
           <div className="absolute top-0 left-0 right-0 z-20 flex items-center justify-between p-4 bg-gradient-to-b from-black/80 to-transparent">
