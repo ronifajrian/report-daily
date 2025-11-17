@@ -255,6 +255,7 @@ const AdminDashboard = () => {
             <InfiniteReportsList
               showAuthor={true}
               allUsers={allUsers}
+              userRole="admin"  // ← Tambahkan ini (atau bisa userRole jika sudah ada dari useAuth)
             />
           )}
         </TabsContent>

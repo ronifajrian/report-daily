@@ -26,6 +26,7 @@ const StaffDashboard = () => {
       <InfiniteReportsList 
         userId={user?.id}
         showAuthor={false}
+        userRole="staff"
       />
     </div>
   );

@@ -82,10 +82,8 @@ export const ReportDetailModal = ({ reportId, open, onClose, onReportUpdated }: 
     if (open && reportId) {
       fetchReportDetail();
       
-      // Push a new history state when modal opens
       window.history.pushState({ modalOpen: true }, '');
       
-      // Handle browser back button
       const handlePopState = (e: PopStateEvent) => {
         if (open) {
           e.preventDefault();
@@ -99,7 +97,6 @@ export const ReportDetailModal = ({ reportId, open, onClose, onReportUpdated }: 
         window.removeEventListener('popstate', handlePopState);
       };
     } else {
-      // Reset state when closed
       setReport(null);
       setFiles([]);
       setDescription("");
@@ -234,8 +231,14 @@ export const ReportDetailModal = ({ reportId, open, onClose, onReportUpdated }: 
 
       toast({ title: "Success", description: "Report updated" });
       setNewFiles([]);
-      fetchReportDetail();
-      if (onReportUpdated) onReportUpdated();
+      
+      // ✅ FIX: Close modal first, then trigger refresh
+      onClose();
+      
+      // Small delay to ensure modal closes before refresh
+      setTimeout(() => {
+        if (onReportUpdated) onReportUpdated();
+      }, 100);
     } catch (err: any) {
       toast({ title: "Error", description: err?.message || "Failed to save", variant: "destructive" });
     } finally {
@@ -268,8 +271,13 @@ export const ReportDetailModal = ({ reportId, open, onClose, onReportUpdated }: 
       });
 
       toast({ title: "Success", description: "Report approved" });
-      fetchReportDetail();
-      if (onReportUpdated) onReportUpdated();
+      
+      // ✅ FIX: Close modal first, then trigger refresh
+      onClose();
+      
+      setTimeout(() => {
+        if (onReportUpdated) onReportUpdated();
+      }, 100);
     } catch (err: any) {
       toast({ title: "Error", description: err?.message || "Failed to approve", variant: "destructive" });
     } finally {
@@ -308,8 +316,13 @@ export const ReportDetailModal = ({ reportId, open, onClose, onReportUpdated }: 
       toast({ title: "Success", description: "Report rejected" });
       setShowRejectDialog(false);
       setRejectionReason("");
-      fetchReportDetail();
-      if (onReportUpdated) onReportUpdated();
+      
+      // ✅ FIX: Close modal first, then trigger refresh
+      onClose();
+      
+      setTimeout(() => {
+        if (onReportUpdated) onReportUpdated();
+      }, 100);
     } catch (err: any) {
       toast({ title: "Error", description: err?.message || "Failed to reject", variant: "destructive" });
     } finally {
@@ -363,7 +376,10 @@ export const ReportDetailModal = ({ reportId, open, onClose, onReportUpdated }: 
       }
 
       onClose();
-      if (onReportUpdated) onReportUpdated();
+      
+      setTimeout(() => {
+        if (onReportUpdated) onReportUpdated();
+      }, 100);
     } catch (err: any) {
       toast({ title: "Error", description: err?.message || "Failed to delete report", variant: "destructive" });
     } finally {
@@ -383,7 +399,6 @@ export const ReportDetailModal = ({ reportId, open, onClose, onReportUpdated }: 
           side="right" 
           className="w-full p-0 sm:max-w-full [&>button]:hidden"
         >
-            {/* Title and Description for accessibility */}
             <VisuallyHidden>
             <SheetTitle>Report Details</SheetTitle>
             <SheetDescription>
@@ -413,7 +428,6 @@ export const ReportDetailModal = ({ reportId, open, onClose, onReportUpdated }: 
                     </Button>
                     <h2 className="text-lg font-semibold flex-1 truncate">Report Details</h2>
                     
-                    {/* Status Badge */}
                     <div className="flex items-center gap-2 px-3 py-1.5 rounded-full bg-muted/50 border flex-shrink-0">
                       {report.status === "approved" ? (
                         <CheckCircle className="h-3.5 w-3.5 text-green-600" />
@@ -428,7 +442,6 @@ export const ReportDetailModal = ({ reportId, open, onClose, onReportUpdated }: 
                     </div>
                   </div>
 
-                  {/* Action Buttons */}
                   {(canEdit || canApproveReject || canDelete) && (
                     <div className="flex flex-wrap gap-2">
                       {canEdit && (
@@ -611,16 +624,12 @@ export const ReportDetailModal = ({ reportId, open, onClose, onReportUpdated }: 
       {/* Reject Dialog */}
       <Dialog open={showRejectDialog} onOpenChange={setShowRejectDialog}>
         <DialogContent>
-          {/* Ensure DialogTitle and DialogDescription are direct children of DialogContent
-              to satisfy Radix accessibility checks. Keep them visually hidden so we can
-              still render a visible header (below) without duplication. */}
           <VisuallyHidden>
             <DialogTitle>Reject Report</DialogTitle>
             <DialogDescription>Please provide a reason for rejecting this report</DialogDescription>
           </VisuallyHidden>
 
             <DialogHeader>
-            {/* Visible title/description kept for UI */}
             <h2 className="text-lg font-semibold leading-none tracking-tight">Reject Report</h2>
             <p className="text-sm text-muted-foreground">Please provide a reason for rejecting this report</p>
             </DialogHeader>
@@ -643,7 +652,6 @@ export const ReportDetailModal = ({ reportId, open, onClose, onReportUpdated }: 
         </DialogContent>
       </Dialog>
 
-      {/* Attachment Preview */}
       <AttachmentCarouselPreview files={files} initialIndex={previewInitialIndex} open={previewOpen} onOpenChange={setPreviewOpen} />
     </>
   );

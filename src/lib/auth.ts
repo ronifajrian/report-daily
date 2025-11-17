@@ -2,15 +2,48 @@
 import { supabase } from "@/integrations/supabase/client";
 
 /**
- * Central auth helpers: single-flight sign-out + client cleanup + redirect,
- * plus attaching an auth state change listener.
+ * IMPROVED: Cross-device auth dengan circuit breaker pattern
  */
 
-export const SIGNOUT_FLAG = "app:signout_in_progress"; // export so other modules can reference if needed
+export const SIGNOUT_FLAG = "app:signout_in_progress";
+const SIGNOUT_COMPLETE_FLAG = "app:signout_complete";
+const AUTH_ERROR_FLAG = "app:auth_error";
+
+// Circuit breaker untuk prevent infinite loops
+let authErrorCount = 0;
+const MAX_AUTH_ERRORS = 3;
+const AUTH_ERROR_RESET_MS = 5000;
+let authErrorTimer: NodeJS.Timeout | null = null;
 
 let signOutInProgressPromise: Promise<void> | null = null;
 
-/** Remove supabase keys from localStorage (best-effort). */
+/** Reset auth error counter after timeout */
+function resetAuthErrorCounter() {
+  if (authErrorTimer) clearTimeout(authErrorTimer);
+  authErrorTimer = setTimeout(() => {
+    authErrorCount = 0;
+  }, AUTH_ERROR_RESET_MS);
+}
+
+/** Check if too many auth errors (circuit breaker) */
+export function shouldBlockAuthOperations(): boolean {
+  return authErrorCount >= MAX_AUTH_ERRORS;
+}
+
+/** Increment auth error with circuit breaker */
+export function incrementAuthError() {
+  authErrorCount++;
+  resetAuthErrorCounter();
+  
+  if (authErrorCount >= MAX_AUTH_ERRORS) {
+    console.warn('[AUTH] Circuit breaker activated - too many auth errors');
+    try {
+      localStorage.setItem(AUTH_ERROR_FLAG, Date.now().toString());
+    } catch {}
+  }
+}
+
+/** Clear all auth flags and state */
 export function clearSupabaseLocalStorage(): void {
   if (typeof window === "undefined") return;
   try {
@@ -25,16 +58,16 @@ export function clearSupabaseLocalStorage(): void {
           || k.includes("sb-access-token") || k.includes("supabase.auth") || k.startsWith("sb-")) {
         toRemove.push(k); continue;
       }
-      if (k === SIGNOUT_FLAG) toRemove.push(k);
+      if (k === SIGNOUT_FLAG || k === SIGNOUT_COMPLETE_FLAG || k === AUTH_ERROR_FLAG) {
+        toRemove.push(k);
+      }
     }
     toRemove.forEach(k => { try { localStorage.removeItem(k); } catch {} });
-    // console.debug("[auth] cleared keys:", toRemove);
   } catch (e) {
     // ignore localStorage access errors
   }
 }
 
-/** Promise.all with timeout that always resolves. */
 function promiseAllWithTimeout(promises: Promise<void>[], timeoutMs = 3000): Promise<void> {
   return new Promise((resolve) => {
     let settled = false;
@@ -47,18 +80,22 @@ function promiseAllWithTimeout(promises: Promise<void>[], timeoutMs = 3000): Pro
   });
 }
 
-/** Best-effort client cleanup (localStorage, cached object URLs, indexedDB, SW). */
 async function ensureClientCleanup(): Promise<void> {
   if (typeof window === "undefined") return;
   const tasks: Promise<void>[] = [];
 
   // localStorage clear
-  tasks.push(new Promise((resolve) => { try { clearSupabaseLocalStorage(); } catch {} setTimeout(resolve, 0); }));
+  tasks.push(new Promise((resolve) => { 
+    try { clearSupabaseLocalStorage(); } catch {} 
+    setTimeout(resolve, 0); 
+  }));
 
-  // revoke cached object URLs if helper exists (protectedFetch exports such function)
+  // revoke cached object URLs
   tasks.push(new Promise((resolve) => {
     try {
-      const maybeFn = (globalThis as any).revokeAllCachedObjectUrls || (typeof (window as any).revokeAllCachedObjectUrls === "function" ? (window as any).revokeAllCachedObjectUrls : null);
+      const maybeFn = (globalThis as any).revokeAllCachedObjectUrls || 
+                      (typeof (window as any).revokeAllCachedObjectUrls === "function" ? 
+                       (window as any).revokeAllCachedObjectUrls : null);
       if (typeof maybeFn === "function") {
         try { (maybeFn as any)(); } catch {}
       }
@@ -66,7 +103,7 @@ async function ensureClientCleanup(): Promise<void> {
     setTimeout(resolve, 0);
   }));
 
-  // delete IndexedDB names (adjust if your app uses different names)
+  // delete IndexedDB
   tasks.push(new Promise((resolve) => {
     try {
       if (typeof indexedDB === "undefined") return resolve();
@@ -89,62 +126,78 @@ async function ensureClientCleanup(): Promise<void> {
     }
   }));
 
-  // unregister service workers
-  tasks.push(new Promise((resolve) => {
-    try {
-      if (!("serviceWorker" in navigator) || !navigator.serviceWorker.getRegistrations) return resolve();
-      navigator.serviceWorker.getRegistrations()
-        .then(regs => Promise.all(regs.map(r => r.unregister().catch(()=>{}))))
-        .then(() => resolve()).catch(() => resolve());
-    } catch {
-      resolve();
-    }
-  }));
-
-  // cloudflare/temp object url cleanup hook (if you store refs)
-  tasks.push(new Promise((resolve) => {
-    try {
-      const maybeList = (window as any).CF_TEMP_OBJECT_URLS;
-      if (Array.isArray(maybeList)) {
-        try { maybeList.forEach((u: string) => { try { URL.revokeObjectURL(u); } catch {} }); } catch {}
-      }
-    } catch {}
-    setTimeout(resolve, 0);
-  }));
-
   await promiseAllWithTimeout(tasks, 3500);
 }
 
 /**
- * Idempotent sign-out: single-flight Promise ensures multiple callers wait
- * for the same in-progress flow and do not cause duplicate redirects.
+ * IMPROVED: Single-flight sign out with cross-tab coordination
  */
 export async function signOutAndRedirect(redirectTo = "/"): Promise<void> {
   if (typeof window === "undefined") return;
 
-  // if an in-memory signout flow already running, await it
+  // Check circuit breaker
+  if (shouldBlockAuthOperations()) {
+    console.warn('[AUTH] Blocked by circuit breaker, forcing redirect');
+    try { window.location.replace(redirectTo); } catch { window.location.href = redirectTo; }
+    return;
+  }
+
+  // Check if already complete in another tab
+  try {
+    const completeFlag = localStorage.getItem(SIGNOUT_COMPLETE_FLAG);
+    if (completeFlag) {
+      const timestamp = parseInt(completeFlag);
+      if (Date.now() - timestamp < 5000) { // 5 second window
+        console.log('[AUTH] Sign out already completed in another tab');
+        try { window.location.replace(redirectTo); } catch { window.location.href = redirectTo; }
+        return;
+      }
+    }
+  } catch {}
+
+  // If already in progress, wait for it
   if (signOutInProgressPromise) {
     try { await signOutInProgressPromise; } catch {}
     return;
   }
 
-  // create single-flight promise
+  // Create single-flight promise
   signOutInProgressPromise = (async () => {
     try {
+      // Set in-progress flag
       try { localStorage.setItem(SIGNOUT_FLAG, "1"); } catch {}
-      // server sign-out (best-effort)
+      
+      // Server sign-out with timeout
       try {
         if (supabase && supabase.auth && typeof (supabase.auth as any).signOut === "function") {
-          await (supabase.auth as any).signOut();
+          const timeoutPromise = new Promise((_, reject) => 
+            setTimeout(() => reject(new Error('Sign out timeout')), 3000)
+          );
+          await Promise.race([
+            (supabase.auth as any).signOut(),
+            timeoutPromise
+          ]).catch(err => {
+            console.warn('[AUTH] Sign out error (continuing cleanup):', err);
+          });
         }
-      } catch {
-        // ignore server-side error
+      } catch (err) {
+        console.warn('[AUTH] Sign out exception (continuing cleanup):', err);
       }
 
-      // client cleanup
+      // Client cleanup
       await ensureClientCleanup();
+
+      // Mark as complete for other tabs
+      try {
+        localStorage.removeItem(SIGNOUT_FLAG);
+        localStorage.setItem(SIGNOUT_COMPLETE_FLAG, Date.now().toString());
+      } catch {}
+
+      // Reset circuit breaker
+      authErrorCount = 0;
+      
     } finally {
-      // redirect once (owner of this flow)
+      // Redirect once
       try { window.location.replace(redirectTo); } catch { try { window.location.href = redirectTo; } catch {} }
     }
   })();
@@ -153,28 +206,45 @@ export async function signOutAndRedirect(redirectTo = "/"): Promise<void> {
     await signOutInProgressPromise;
   } finally {
     signOutInProgressPromise = null;
-    // We intentionally leave SIGNOUT_FLAG for the app init to remove when unauthenticated is confirmed.
   }
 }
 
 /**
- * Attach a single auth state change listener (Supabase v1/v2 compatible).
- * Returns an unsubscribe function.
+ * IMPROVED: Auth state listener with better error handling
  */
 export function setAuthStateChangeListener(handler: (event: string, session: any) => void): () => void {
   try {
     if (!supabase || !supabase.auth) return () => {};
 
-    // Supabase onAuthStateChange v1/v2 compatibility
+    // const wrappedHandler = (event: string, session: any) => {
+    //   try {
+    //     // Detect cross-tab sign out
+    //     if (event === "SIGNED_OUT") {
+    //       try {
+    //         const completeFlag = localStorage.getItem(SIGNOUT_COMPLETE_FLAG);
+    //         if (completeFlag) {
+    //           const timestamp = parseInt(completeFlag);
+    //           if (Date.now() - timestamp < 5000) {
+    //             console.log('[AUTH] Detected cross-tab sign out');
+    //             try { window.location.replace("/"); } catch { window.location.href = "/"; }
+    //             return;
+    //           }
+    //         }
+    //       } catch {}
+    //     }
+        
+    //     handler(event, session);
+    //   } catch (e) {
+    //     console.warn('[AUTH] Handler error:', e);
+    //   }
+    // };
+
     const maybe = (supabase.auth as any).onAuthStateChange
-      ? (supabase.auth as any).onAuthStateChange((event: string, session: any) => {
-          try { handler(event, session); } catch (e) { console.warn("auth handler error", e); }
-        })
+      ? (supabase.auth as any).onAuthStateChange(handler)
       : null;
 
     if (!maybe) return () => {};
 
-    // shape differences
     if ((maybe as any)?.data?.subscription) {
       return () => { try { (maybe as any).data.subscription.unsubscribe(); } catch {} };
     }
@@ -182,7 +252,24 @@ export function setAuthStateChangeListener(handler: (event: string, session: any
       return () => { try { (maybe as any).unsubscribe(); } catch {} };
     }
   } catch (e) {
-    console.warn("Failed to attach auth listener", e);
+    console.warn('[AUTH] Failed to attach listener', e);
   }
   return () => {};
+}
+
+/**
+ * IMPROVED: Check if user is authenticated (with circuit breaker)
+ */
+export async function isAuthenticated(): Promise<boolean> {
+  if (shouldBlockAuthOperations()) {
+    return false;
+  }
+
+  try {
+    const { data: { session } } = await supabase.auth.getSession();
+    return !!session?.access_token;
+  } catch {
+    incrementAuthError();
+    return false;
+  }
 }

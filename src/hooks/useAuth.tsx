@@ -1,9 +1,14 @@
 // src/hooks/useAuth.tsx
-import { useState, useEffect, createContext, useContext, ReactNode, useRef } from "react";
+import { useState, useEffect, createContext, useContext, ReactNode, useRef, useCallback, useMemo } from "react";
 import { User, Session } from "@supabase/supabase-js";
 import { supabase } from "@/integrations/supabase/client";
 import { useToast } from "@/hooks/use-toast";
-import { SIGNOUT_FLAG, signOutAndRedirect, setAuthStateChangeListener } from "@/lib/auth";
+import { 
+  SIGNOUT_FLAG, 
+  signOutAndRedirect, 
+  setAuthStateChangeListener,
+  shouldBlockAuthOperations 
+} from "@/lib/auth";
 
 interface AuthContextType {
   user: User | null;
@@ -31,24 +36,43 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
   const { toast } = useToast();
   const isInitialized = useRef(false);
   const isRedirecting = useRef(false);
+  const lastSessionCheck = useRef<number>(0);
 
-  const clearAuthState = () => {
+  const clearAuthState = useCallback(() => {
     setUser(null);
     setSession(null);
     setUserRole(null);
-  };
+  }, []); // Dependency kosong = fungsi ini SANGAT stabil
 
-  const signOut = async () => {
-    if (isRedirecting.current) return;
+  const signOut = useCallback(async () => {
+    if (isRedirecting.current || shouldBlockAuthOperations()) return;
     isRedirecting.current = true;
-    clearAuthState();
+    clearAuthState(); // Panggil versi yang stabil
     try {
       await signOutAndRedirect("/");
     } catch (e) {
       console.error("signOut failed", e);
       try { window.location.replace("/"); } catch { window.location.href = "/"; }
     }
-  };
+  }, [clearAuthState]); // Tambahkan dependency stabil
+
+  // Listen for storage events (cross-tab sign out)
+  useEffect(() => {
+    const handleStorageChange = (e: StorageEvent) => {
+      // Sign out complete in another tab
+      if (e.key === 'app:signout_complete') {
+        console.log('[AUTH] Detected sign out in another tab');
+        clearAuthState();
+        if (!isRedirecting.current) {
+          isRedirecting.current = true;
+          try { window.location.replace("/"); } catch { window.location.href = "/"; }
+        }
+      }
+    };
+
+    window.addEventListener('storage', handleStorageChange);
+    return () => window.removeEventListener('storage', handleStorageChange);
+  }, [clearAuthState]);
 
   useEffect(() => {
     const isSignoutInProgress = () => {
@@ -57,38 +81,44 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
 
     const unsubscribe = setAuthStateChangeListener((event, s) => {
       try {
+        // Handle signed out event
         if (event === "SIGNED_OUT") {
           if (isSignoutInProgress()) {
-            // Centralized signout is running — don't redirect here, just clear local state
             clearAuthState();
             return;
           }
-          // Not centralized -> clean and redirect
           try { localStorage.removeItem(SIGNOUT_FLAG); } catch {}
           clearAuthState();
-          if (!isRedirecting.current) {
+          if (!isRedirecting.current && !shouldBlockAuthOperations()) {
             isRedirecting.current = true;
             try { window.location.replace("/"); } catch { window.location.href = "/"; }
           }
           return;
         }
 
-        // If session becomes null after init treat as signed out
+        // Handle session loss after initialization
         if (!s && isInitialized.current) {
+          // Debounce session checks to prevent rapid redirects
+          const now = Date.now();
+          if (now - lastSessionCheck.current < 1000) {
+            return; // Skip if checked less than 1 second ago
+          }
+          lastSessionCheck.current = now;
+
           if (isSignoutInProgress()) {
             clearAuthState();
             return;
           }
           try { localStorage.removeItem(SIGNOUT_FLAG); } catch {}
           clearAuthState();
-          if (!isRedirecting.current) {
+          if (!isRedirecting.current && !shouldBlockAuthOperations()) {
             isRedirecting.current = true;
             try { window.location.replace("/"); } catch { window.location.href = "/"; }
           }
           return;
         }
 
-        // On sign-in or token refresh, set user & session
+        // Handle sign in or token refresh
         if (s?.user) {
           isRedirecting.current = false;
           setSession(s);
@@ -114,11 +144,13 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
       }
     });
 
-    // initial session restore
+    // Initial session restore
     supabase.auth
       .getSession()
       .then(({ data: { session } }) => {
         isInitialized.current = true;
+        lastSessionCheck.current = Date.now();
+        
         if (session?.user) {
           setSession(session);
           setUser(session.user);
@@ -152,8 +184,19 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
     return () => {
       try { unsubscribe && unsubscribe(); } catch {}
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [clearAuthState]);
 
-  return <AuthContext.Provider value={{ user, session, userRole, loading, signOut }}>{children}</AuthContext.Provider>;
+  const value = useMemo(() => ({
+    user,
+    session,
+    userRole,
+    loading,
+    signOut
+  }), [user, session, userRole, loading, signOut]); // Dependency adalah nilai-nilai itu sendiri
+
+  return (
+    <AuthContext.Provider value={ value }>
+      {children}
+    </AuthContext.Provider>
+  );
 };

@@ -1,8 +1,10 @@
+// src/components/dashboard/ReportCard.tsx
+
 import { Card, CardContent } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { format } from 'date-fns';
 import { Report } from './StaffDashboard';
-import { MapPin, FileText, File } from 'lucide-react';
+import { MapPin } from 'lucide-react'; // <-- MessageSquare dihapus
 import { useState, useEffect } from 'react';
 import { supabase } from '@/integrations/supabase/client';
 import { ScrollArea, ScrollBar } from '@/components/ui/scroll-area';
@@ -30,6 +32,8 @@ export const ReportCard = ({ report, onClick, showAuthor = false, isNew = false 
   const [previewInitialIndex, setPreviewInitialIndex] = useState(0);
   const [attachments, setAttachments] = useState<ReportFile[]>([]);
   const [loadingAttachments, setLoadingAttachments] = useState(true);
+  
+  // --- BLOK COMMENT COUNT DIHAPUS ---
 
   useEffect(() => {
     const fetchAttachments = async () => {
@@ -52,6 +56,8 @@ export const ReportCard = ({ report, onClick, showAuthor = false, isNew = false 
     fetchAttachments();
   }, [report.id]);
 
+  // --- useEffect UNTUK COMMENT COUNT DIHAPUS ---
+
   const getStatusBadge = (status: string) => {
     switch (status) {
       case 'approved':
@@ -67,7 +73,8 @@ export const ReportCard = ({ report, onClick, showAuthor = false, isNew = false 
 
   const openGoogleMaps = (e: React.MouseEvent, lat: number, lng: number) => {
     e.stopPropagation();
-    window.open(`https://www.google.com/maps?q=${lat},${lng}`, '_blank');
+    // ✅ FIX URL Google Maps
+    window.open(`https://maps.google.com/?q=${lat},${lng}`, '_blank');
   };
 
   return (
@@ -81,7 +88,7 @@ export const ReportCard = ({ report, onClick, showAuthor = false, isNew = false 
         <CardContent className="p-4 space-y-3">
           <div className="flex items-start justify-between gap-2">
             <div className="flex-1">
-              {showAuthor && (
+              {showAuthor && report.profiles && (
                 <p className="font-semibold text-sm mb-1">{report.profiles.full_name}</p>
               )}
               <p className="text-xs text-muted-foreground flex items-center gap-1">
@@ -131,6 +138,8 @@ export const ReportCard = ({ report, onClick, showAuthor = false, isNew = false 
               <ScrollBar orientation="horizontal" />
             </ScrollArea>
           )}
+
+          {/* --- BLOK RENDER COMMENT COUNT DIHAPUS --- */}
 
           {report.rejection_reason && (
             <div className="mt-2 p-2 bg-destructive/10 rounded text-xs text-destructive">
