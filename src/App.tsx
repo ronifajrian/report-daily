@@ -11,6 +11,8 @@ import MaintenanceCheck from "@/components/MaintenanceCheck";
 import { DashboardLayout } from "@/components/layout/DashboardLayout";
 import ExportReports from "./pages/ExportReports";
 import NotFound from "./pages/NotFound";
+import { LocationProvider } from "@/contexts/LocationContext";
+import { LocationPermissionModal } from "@/components/location/LocationPermissionModal";
 
 // Lazy load heavier pages so initial bundle is smaller
 const Index = lazy(() => import("./pages/Index"));
@@ -44,84 +46,89 @@ const App = () => (
   <QueryClientProvider client={queryClient}>
     <TooltipProvider>
       <AuthProvider>
-        <Toaster />
-        <Sonner />
-        <BrowserRouter>
-          <Suspense fallback={<LoadingFallback />}>
-            <Routes>
-              <Route path="/" element={<Index />} />
-              <Route path="/maintenance" element={<Maintenance />} />
-              <Route
-                path="/reset-password"
-                element={
-                  <ProtectedRoute>
-                    <ResetPassword />
-                  </ProtectedRoute>
-                }
-              />
-              <Route
-                path="/pending-approval"
-                element={
-                  <ProtectedRoute>
-                    <PendingApproval />
-                  </ProtectedRoute>
-                }
-              />
+        <LocationProvider> 
+          <Toaster />
+          <Sonner />
+          <LocationPermissionModal />
 
-              {/* Dashboard routes with persistent layout and maintenance check */}
-              <Route
-                path="/dashboard"
-                element={
-                  <ProtectedRoute>
-                    <MaintenanceCheck>
-                      <DashboardLayout>
-                        <Dashboard />
-                      </DashboardLayout>
-                    </MaintenanceCheck>
-                  </ProtectedRoute>
-                }
-              />
-              <Route
-                path="/profile"
-                element={
-                  <ProtectedRoute>
-                    <MaintenanceCheck>
-                      <DashboardLayout>
-                        <Profile />
-                      </DashboardLayout>
-                    </MaintenanceCheck>
-                  </ProtectedRoute>
-                }
-              />
-              {/* <Route
-                path="/report/:id"
-                element={
-                  <ProtectedRoute>
-                    <MaintenanceCheck>
-                      <DashboardLayout>
-                        <ReportDetail />
-                      </DashboardLayout>
-                    </MaintenanceCheck>
-                  </ProtectedRoute>
-                }
-              /> */}
+          <BrowserRouter>
+            <Suspense fallback={<LoadingFallback />}>
+              <Routes>
+                <Route path="/" element={<Index />} />
+                <Route path="/maintenance" element={<Maintenance />} />
+                <Route
+                  path="/reset-password"
+                  element={
+                    <ProtectedRoute>
+                      <ResetPassword />
+                    </ProtectedRoute>
+                  }
+                />
+                <Route
+                  path="/pending-approval"
+                  element={
+                    <ProtectedRoute>
+                      <PendingApproval />
+                    </ProtectedRoute>
+                  }
+                />
 
-              <Route 
-                path="/export-reports" 
-                element={
-                  <ProtectedRoute>
-                    <MaintenanceCheck>
-                      <DashboardLayout>
-                        <ExportReports />
-                      </DashboardLayout>
-                    </MaintenanceCheck>
-                  </ProtectedRoute>
-                } />
-              {/* ADD ALL CUSTOM ROUTES ABOVE THE CATCH-ALL "*" ROUTE */}
-              <Route path="*" element={<NotFound />} />
-            </Routes>
-          </Suspense>
-        </BrowserRouter>
+                {/* Dashboard routes with persistent layout and maintenance check */}
+                <Route
+                  path="/dashboard"
+                  element={
+                    <ProtectedRoute>
+                      <MaintenanceCheck>
+                        <DashboardLayout>
+                          <Dashboard />
+                        </DashboardLayout>
+                      </MaintenanceCheck>
+                    </ProtectedRoute>
+                  }
+                />
+                <Route
+                  path="/profile"
+                  element={
+                    <ProtectedRoute>
+                      <MaintenanceCheck>
+                        <DashboardLayout>
+                          <Profile />
+                        </DashboardLayout>
+                      </MaintenanceCheck>
+                    </ProtectedRoute>
+                  }
+                />
+                {/* <Route
+                  path="/report/:id"
+                  element={
+                    <ProtectedRoute>
+                      <MaintenanceCheck>
+                        <DashboardLayout>
+                          <ReportDetail />
+                        </DashboardLayout>
+                      </MaintenanceCheck>
+                    </ProtectedRoute>
+                  }
+                /> */}
+
+                <Route 
+                  path="/export-reports" 
+                  element={
+                    <ProtectedRoute>
+                      <MaintenanceCheck>
+                        <DashboardLayout>
+                          <ExportReports />
+                        </DashboardLayout>
+                      </MaintenanceCheck>
+                    </ProtectedRoute>
+                  } />
+                {/* ADD ALL CUSTOM ROUTES ABOVE THE CATCH-ALL "*" ROUTE */}
+                <Route path="*" element={<NotFound />} />
+              </Routes>
+            </Suspense>
+          </BrowserRouter>
+        </LocationProvider>
+
       </AuthProvider>
     </TooltipProvider>
   </QueryClientProvider>

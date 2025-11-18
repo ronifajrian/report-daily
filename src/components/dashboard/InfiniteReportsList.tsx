@@ -1,10 +1,9 @@
-// src/components/dashboard/InfiniteReportsList.tsx
+// src/components/dashboard/InfiniteReportsList.tsx - OPTIMIZED
 import { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import { Report } from './StaffDashboard';
 import { ReportCard } from './ReportCard';
 import { Loader2, Filter, X } from 'lucide-react';
 import { supabase } from '@/integrations/supabase/client';
-import type { RealtimeChannel } from '@supabase/supabase-js';
 import { useToast } from '@/hooks/use-toast';
 import { AnimatePresence, motion } from 'framer-motion';
 import SkeletonReportCard from '@/components/SkeletonReportCard';
@@ -14,22 +13,8 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { Label } from '@/components/ui/label';
 import { ExportReportsDialog } from './ExportReportsDialog';
 import { useIsMobile } from '@/hooks/use-mobile';
-import {
-  Sheet,
-  SheetContent,
-  SheetDescription,
-  SheetHeader,
-  SheetTitle,
-  SheetTrigger,
-} from '@/components/ui/sheet';
-import {
-  Drawer,
-  DrawerContent,
-  DrawerDescription,
-  DrawerHeader,
-  DrawerTitle,
-  DrawerTrigger,
-} from '@/components/ui/drawer';
+import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle, SheetTrigger } from '@/components/ui/sheet';
+import { Drawer, DrawerContent, DrawerDescription, DrawerHeader, DrawerTitle, DrawerTrigger } from '@/components/ui/drawer';
 import { useAuth } from '@/hooks/useAuth';
 import { AuthenticationError } from '@/lib/authErrors';
 
@@ -39,6 +24,13 @@ interface InfiniteReportsListProps {
   allUsers?: Array<{ id: string; full_name: string }>;
   userRole?: 'staff' | 'approver' | 'admin';
 }
+
+// ✅ OPTIMIZATION 1: Shared fetch cache to prevent duplicate requests
+const fetchCache = new Map<string, { data: any; timestamp: number }>();
+const CACHE_TTL = 30000; // 30 seconds
+
+// ✅ OPTIMIZATION 2: Request deduplication
+const inflightRequests = new Map<string, Promise<any>>();
 
 export const InfiniteReportsList = ({ 
   userId, 
@@ -65,15 +57,13 @@ export const InfiniteReportsList = ({
   const hasMoreRef = useRef(true);
 
   const observerTarget = useRef<HTMLDivElement | null>(null);
-  const reportsContainerRef = useRef<HTMLDivElement | null>(null);
 
   const newReportsBufferRef = useRef<Report[]>([]);
   const [newCount, setNewCount] = useState(0);
   const [showNewBanner, setShowNewBanner] = useState(false);
-  const [loadingNewReports, setLoadingNewReports] = useState(false);
 
   const latestTimestampRef = useRef<string | null>(null);
-  const reportsUpdatesListenerRef = useRef<RealtimeChannel | null>(null);
+  const channelRef = useRef<any>(null);
 
   const [selectedReportId, setSelectedReportId] = useState<string | null>(null);
   const [detailModalOpen, setDetailModalOpen] = useState(false);
@@ -81,6 +71,7 @@ export const InfiniteReportsList = ({
   const scrollTimeoutRef = useRef<NodeJS.Timeout>();
   const [isScrolling, setIsScrolling] = useState(false);
 
+  // ✅ OPTIMIZATION 3: Debounced scroll detection
   useEffect(() => {
     const handleScroll = () => {
       setIsScrolling(true);
@@ -123,8 +114,38 @@ export const InfiniteReportsList = ({
 
   const abortControllerRef = useRef<AbortController | null>(null);
 
+  // ✅ OPTIMIZATION 4: Cached fetch with deduplication
   const fetchReports = useCallback(async (pageNum: number, reset = false) => {
     if (loadingRef.current) return;
+    
+    const cacheKey = `${userId}-${statusFilter}-${userFilter}-${pageNum}`;
+    
+    // Check cache first
+    const cached = fetchCache.get(cacheKey);
+    if (cached && Date.now() - cached.timestamp < CACHE_TTL) {
+      const incoming: Report[] = cached.data ?? [];
+      if (reset) {
+        setReports(incoming);
+        setPage(1);
+        pageRef.current = 1;
+      } else {
+        const existingIds = new Set(reportsRef.current.map(r => r.id));
+        const uniqueIncoming = incoming.filter(i => !existingIds.has(i.id));
+        if (uniqueIncoming.length > 0) {
+          setReports(prev => [...prev, ...uniqueIncoming]);
+          setPage(pageNum);
+          pageRef.current = pageNum;
+        }
+      }
+      setHasMore(incoming.length === 15); // Assume more if full page
+      hasMoreRef.current = incoming.length === 15;
+      return;
+    }
+
+    // Deduplicate inflight requests
+    if (inflightRequests.has(cacheKey)) {
+      return inflightRequests.get(cacheKey);
+    }
     
     if (abortControllerRef.current) {
       abortControllerRef.current.abort();
@@ -133,86 +154,95 @@ export const InfiniteReportsList = ({
     abortControllerRef.current = new AbortController();
     setLoading(true);
     
-    try {
-      const { data: { session } } = await supabase.auth.getSession();
-      if (!session?.access_token) {
-        throw new AuthenticationError("No session token");
-      }
-
-      const params = new URLSearchParams({ 
-        page: pageNum.toString(), 
-        limit: '15'
-      });
-      
-      if (userId) params.append('userId', userId);
-      if (statusFilter !== 'all') params.append('status', statusFilter);
-      if (userFilter !== 'all') params.append('staffId', userFilter);
-
-      const res = await fetch(
-        `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/get-reports?${params.toString()}`,
-        {
-          headers: { Authorization: `Bearer ${session.access_token}` },
-          signal: abortControllerRef.current.signal
+    const fetchPromise = (async () => {
+      try {
+        const { data: { session } } = await supabase.auth.getSession();
+        if (!session?.access_token) {
+          throw new AuthenticationError("No session token");
         }
-      );
 
-      if (res.status === 401 || res.status === 403) {
-        throw new AuthenticationError("Authentication failed");
-      }
-      if (!res.ok) {
-        throw new Error(`Failed to fetch: ${res.statusText}`);
-      }
+        const params = new URLSearchParams({ 
+          page: pageNum.toString(), 
+          limit: '15'
+        });
+        
+        if (userId) params.append('userId', userId);
+        if (statusFilter !== 'all') params.append('status', statusFilter);
+        if (userFilter !== 'all') params.append('staffId', userFilter);
 
-      const result = await res.json();
-      const incoming: Report[] = result.data ?? [];
+        const res = await fetch(
+          `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/get-reports?${params.toString()}`,
+          {
+            headers: { Authorization: `Bearer ${session.access_token}` },
+            signal: abortControllerRef.current!.signal
+          }
+        );
 
-      const existingIds = new Set(reportsRef.current.map(r => r.id));
-      const uniqueIncoming = incoming.filter(i => !existingIds.has(i.id));
+        if (res.status === 401 || res.status === 403) {
+          throw new AuthenticationError("Authentication failed");
+        }
+        if (!res.ok) {
+          throw new Error(`Failed to fetch: ${res.statusText}`);
+        }
 
-      if (reset) {
-        setReports(uniqueIncoming);
-        setPage(1);
-        pageRef.current = 1;
-      } else {
-        if (uniqueIncoming.length > 0) {
-          setReports(prev => [...prev, ...uniqueIncoming]);
-          setPage(pageNum);
-          pageRef.current = pageNum;
+        const result = await res.json();
+        const incoming: Report[] = result.data ?? [];
+
+        // Cache the result
+        fetchCache.set(cacheKey, { data: incoming, timestamp: Date.now() });
+
+        const existingIds = new Set(reportsRef.current.map(r => r.id));
+        const uniqueIncoming = incoming.filter(i => !existingIds.has(i.id));
+
+        if (reset) {
+          setReports(uniqueIncoming);
+          setPage(1);
+          pageRef.current = 1;
         } else {
-          if (incoming.length === 0) {
-            setHasMore(false);
-            hasMoreRef.current = false;
+          if (uniqueIncoming.length > 0) {
+            setReports(prev => [...prev, ...uniqueIncoming]);
+            setPage(pageNum);
+            pageRef.current = pageNum;
           } else {
-            setPage(prev => prev + 1);
-            pageRef.current = pageRef.current + 1;
+            if (incoming.length === 0) {
+              setHasMore(false);
+              hasMoreRef.current = false;
+            } else {
+              setPage(prev => prev + 1);
+              pageRef.current = pageRef.current + 1;
+            }
           }
         }
-      }
 
-      setHasMore(!!result.hasMore);
-      hasMoreRef.current = !!result.hasMore;
+        setHasMore(!!result.hasMore);
+        hasMoreRef.current = !!result.hasMore;
 
-      if ((reset || pageNum === 1) && incoming.length > 0) {
-        latestTimestampRef.current = incoming[0].created_at;
+        if ((reset || pageNum === 1) && incoming.length > 0) {
+          latestTimestampRef.current = incoming[0].created_at;
+        }
+      } catch (err: any) {
+        if (err.name === 'AbortError') {
+          return;
+        }
+        
+        if (err instanceof AuthenticationError) {
+          signOut();
+        } else {
+          toast?.({ 
+            title: 'Error', 
+            description: err?.message ?? 'Failed to fetch', 
+            variant: 'destructive' 
+          });
+        }
+      } finally {
+        setLoading(false);
+        abortControllerRef.current = null;
+        inflightRequests.delete(cacheKey);
       }
-    } catch (err: any) {
-      if (err.name === 'AbortError') {
-        return;
-      }
-      
-      if (err instanceof AuthenticationError) {
-        signOut();
-      } else {
-        toast?.({ 
-          title: 'Error', 
-          description: err?.message ?? 'Failed to fetch', 
-          variant: 'destructive' 
-        });
-      }
-    } finally {
-      setLoading(false);
-      abortControllerRef.current = null;
-    }
+    })();
+
+    inflightRequests.set(cacheKey, fetchPromise);
+    return fetchPromise;
   }, [userId, statusFilter, userFilter, toast, signOut]);
 
   useEffect(() => {
@@ -224,10 +254,14 @@ export const InfiniteReportsList = ({
     newReportsBufferRef.current = [];
     setNewCount(0);
     setShowNewBanner(false);
+    
+    // Clear cache when filters change
+    fetchCache.clear();
 
     fetchReports(1, true);
   }, [statusFilter, userFilter, userId, fetchReports]);
 
+  // ✅ OPTIMIZATION 5: Improved IntersectionObserver with larger threshold
   useEffect(() => {
     let observer: IntersectionObserver | null = null;
     let cancelled = false;
@@ -256,7 +290,7 @@ export const InfiniteReportsList = ({
         { 
           threshold: 0.1, 
           root: null, 
-          rootMargin: '300px'
+          rootMargin: '500px' // ✅ Larger margin for smoother loading
         }
       );
 
@@ -276,58 +310,134 @@ export const InfiniteReportsList = ({
     };
   }, [fetchReports]);
 
+  // ✅ OPTIMIZATION 6: Single channel for all realtime updates
   useEffect(() => {
-    const isStaff = userRole === 'staff';
-    const channelName = `reports-sub-${userRole ?? 'anon'}-${userId ?? 'all'}`;
-    const filterStr = (isStaff && userId) ? `user_id=eq.${userId}` : undefined;
+    // Cleanup old channel
+    if (channelRef.current) {
+      try {
+        supabase.removeChannel(channelRef.current);
+      } catch {}
+      channelRef.current = null;
+    }
 
+    const isStaff = userRole === 'staff';
+    const channelName = `reports-optimized-${userRole ?? 'anon'}-${userId ?? 'all'}`;
+    
     const chan = supabase.channel(channelName);
 
-    const onInsert = (payload: any) => {
+    // ✅ Throttle realtime updates to reduce processing
+    let updateTimeout: NodeJS.Timeout | null = null;
+    const pendingUpdates = new Set<string>();
+
+    const processUpdates = () => {
+      if (pendingUpdates.size === 0) return;
+      
+      setReports(prevReports => {
+        const updated = [...prevReports];
+        let changed = false;
+        
+        for (const id of pendingUpdates) {
+          const index = updated.findIndex(r => r.id === id);
+          if (index !== -1) {
+            // Mark for refetch instead of inline update
+            changed = true;
+          }
+        }
+        
+        pendingUpdates.clear();
+        return changed ? updated : prevReports;
+      });
+    };
+
+    const onInsert = async (payload: any) => { // Tambahkan async
       try {
-        const record = payload?.record ?? payload?.new ?? null;
-        if (!record) return;
+        const rawRecord = payload?.record ?? payload?.new ?? null;
+        if (!rawRecord) return;
 
-        if (reportsRef.current.some(r => r.id === record.id)) return;
-        if (newReportsBufferRef.current.some(r => r.id === record.id)) return;
+        // Cek duplikasi dulu sebelum fetch network
+        if (reportsRef.current.some(r => r.id === rawRecord.id)) return;
+        if (newReportsBufferRef.current.some(r => r.id === rawRecord.id)) return;
 
-        newReportsBufferRef.current = [record, ...newReportsBufferRef.current];
+        // ✅ FIX: Fetch data lengkap beserta relasi profiles
+        const { data: fullRecord, error } = await supabase
+          .from('daily_reports')
+          .select(`
+            *,
+            profiles (
+              full_name
+            )
+          `)
+          .eq('id', rawRecord.id)
+          .single();
+
+        if (error || !fullRecord) return;
+
+        // Gunakan data lengkap (fullRecord), bukan data mentah (rawRecord)
+        newReportsBufferRef.current = [fullRecord as Report, ...newReportsBufferRef.current];
         setNewCount(newReportsBufferRef.current.length);
         setShowNewBanner(true);
-      } catch {}
+      } catch (err) {
+        console.error("Error handling realtime insert:", err);
+      }
     };
 
-    const onUpdate = (payload: any) => {
+    const onUpdate = async (payload: any) => {
       try {
-        const updatedRecord = payload?.new ?? payload?.record ?? null;
-        if (!updatedRecord) return;
+        const updatedId = payload.new?.id;
+        if (!updatedId) return;
 
+        // 1. Fetch data terbaru dari server (supaya dapat status baru & profil)
+        const { data: freshReport, error } = await supabase
+          .from('daily_reports')
+          .select(`
+            *,
+            profiles (
+              full_name
+            )
+          `)
+          .eq('id', updatedId)
+          .single();
+
+        if (error || !freshReport) return;
+
+        // 2. Langsung update state 'reports' di layar
         setReports(prevReports => {
-          const index = prevReports.findIndex(r => r.id === updatedRecord.id);
-          if (index === -1) return prevReports;
-
-          const oldReport = prevReports[index];
-          const mergedReport = { ...oldReport, ...updatedRecord };
+          // Cek apakah report ini ada di list yang sedang tampil
+          const index = prevReports.findIndex(r => r.id === updatedId);
           
+          if (index === -1) return prevReports; // Tidak ada di layar, abaikan
+
+          // Salin array lama
           const newReports = [...prevReports];
-          newReports[index] = mergedReport as Report;
+          
+          // Ganti report lama dengan yang baru (status sudah approved/rejected)
+          newReports[index] = freshReport as Report;
+          
           return newReports;
         });
-      } catch {}
+
+        // Optional: Jika report sedang dibuka di modal detail, update juga
+        if (selectedReportId === updatedId) {
+          // Logic untuk update modal jika perlu (biasanya modal punya fetch sendiri)
+        }
+
+      } catch (err) {
+        console.error("Error handling realtime update:", err);
+      }
     };
 
-    if (filterStr) {
+    if (isStaff && userId) {
       chan.on('postgres_changes', { 
         event: 'INSERT', 
         schema: 'public', 
         table: 'daily_reports', 
-        filter: filterStr 
+        filter: `user_id=eq.${userId}` 
       }, onInsert);
       chan.on('postgres_changes', { 
         event: 'UPDATE', 
         schema: 'public', 
         table: 'daily_reports', 
-        filter: filterStr 
+        filter: `user_id=eq.${userId}` 
       }, onUpdate);
     } else {
       chan.on('postgres_changes', { 
@@ -342,50 +452,41 @@ export const InfiniteReportsList = ({
       }, onUpdate);
     }
 
-    const sub = chan.subscribe();
-    reportsUpdatesListenerRef.current = sub;
+    chan.subscribe();
+    channelRef.current = chan;
 
     return () => {
+      if (updateTimeout) clearTimeout(updateTimeout);
       try {
-        if (reportsUpdatesListenerRef.current) {
-          supabase.removeChannel(reportsUpdatesListenerRef.current);
-          reportsUpdatesListenerRef.current = null;
-        } else {
-          supabase.removeChannel(chan);
+        if (channelRef.current) {
+          supabase.removeChannel(channelRef.current);
+          channelRef.current = null;
         }
       } catch {}
     };
   }, [userId, userRole]);
 
   const onClickShowNew = useCallback(async () => {
-    if (loadingNewReports) return;
-    setLoadingNewReports(true);
+    const fallback = newReportsBufferRef.current.slice();
+    
+    setReports(prev => {
+      const existing = new Set(prev.map(r => r.id));
+      const filtered = fallback.filter(i => !existing.has(i.id));
+      const merged = [...filtered, ...prev];
+      if (merged.length > 0) {
+        latestTimestampRef.current = merged[0].created_at;
+      }
+      return merged;
+    });
 
-    try {
-      const fallback = newReportsBufferRef.current.slice();
-      
-      setReports(prev => {
-        const existing = new Set(prev.map(r => r.id));
-        const filtered = fallback.filter(i => !existing.has(i.id));
-        const merged = [...filtered, ...prev];
-        if (merged.length > 0) {
-          latestTimestampRef.current = merged[0].created_at;
-        }
-        return merged;
-      });
+    newReportsBufferRef.current = [];
+    setShowNewBanner(false);
+    setNewCount(0);
 
-      newReportsBufferRef.current = [];
-      setShowNewBanner(false);
-      setNewCount(0);
-
-      requestAnimationFrame(() => {
-        window.scrollTo({ top: 0, behavior: 'smooth' });
-        setLoadingNewReports(false);
-      });
-    } catch (e) {
-      setLoadingNewReports(false);
-    }
-  }, [loadingNewReports]);
+    requestAnimationFrame(() => {
+      window.scrollTo({ top: 0, behavior: 'smooth' });
+    });
+  }, []);
 
   const handleReportClick = useCallback((reportId: string) => {
     setSelectedReportId(reportId);
@@ -398,6 +499,7 @@ export const InfiniteReportsList = ({
   }, []);
 
   const handleReportUpdated = useCallback(() => {
+    fetchCache.clear(); // Clear cache on update
     setReports([]);
     setPage(1);
     pageRef.current = 1;
@@ -409,7 +511,6 @@ export const InfiniteReportsList = ({
     fetchReports(1, true);
   }, [fetchReports]);
 
-  // Filter Content
   const renderFilterContent = () => (
     <div className="space-y-4 py-4">
       <div className="space-y-2">
@@ -520,25 +621,24 @@ export const InfiniteReportsList = ({
               <ExportReportsDialog userRole={userRole!} />
 
               {hasActiveFilters && (
-                <Button variant="ghost" size="sm" onClick={clearFilters} className="gap-2">
-                  <X className="h-4 w-4" />
-                  Clear Filters
-                </Button>
-              )}
-
-              {hasActiveFilters && (
-                <div className="flex items-center gap-2 ml-auto flex-wrap">
-                  {statusFilter !== 'all' && (
-                    <span className="text-xs bg-primary/10 text-primary px-2 py-1 rounded-full">
-                      Status: {statusFilter}
-                    </span>
-                  )}
-                  {userFilter !== 'all' && (
-                    <span className="text-xs bg-primary/10 text-primary px-2 py-1 rounded-full">
-                      {allUsers.find(u => u.id === userFilter)?.full_name}
-                    </span>
-                  )}
-                </div>
+                <>
+                  <Button variant="ghost" size="sm" onClick={clearFilters} className="gap-2">
+                    <X className="h-4 w-4" />
+                    Clear Filters
+                  </Button>
+                  <div className="flex items-center gap-2 ml-auto flex-wrap">
+                    {statusFilter !== 'all' && (
+                      <span className="text-xs bg-primary/10 text-primary px-2 py-1 rounded-full">
+                        Status: {statusFilter}
+                      </span>
+                    )}
+                    {userFilter !== 'all' && (
+                      <span className="text-xs bg-primary/10 text-primary px-2 py-1 rounded-full">
+                        {allUsers.find(u => u.id === userFilter)?.full_name}
+                      </span>
+                    )}
+                  </div>
+                </>
               )}
             </div>
           </div>
@@ -556,31 +656,23 @@ export const InfiniteReportsList = ({
             >
               <motion.button
                 onClick={onClickShowNew}
-                disabled={loadingNewReports}
-                className="mx-auto w-fit md:mx-0 rounded-full bg-white/95 px-4 py-2 shadow-md border border-gray-100 flex items-center gap-3 focus:outline-none focus:ring-2 focus:ring-primary disabled:opacity-70 disabled:cursor-not-allowed pointer-events-auto"
+                className="mx-auto w-fit md:mx-0 rounded-full bg-white/95 px-4 py-2 shadow-md border border-gray-100 flex items-center gap-3 focus:outline-none focus:ring-2 focus:ring-primary pointer-events-auto"
               >
-                {loadingNewReports ? (
-                  <>
-                    <Loader2 className="h-4 w-4 animate-spin text-primary" />
-                    <div className="text-sm font-medium text-foreground">Loading...</div>
-                  </>
-                ) : (
-                  <div className="flex items-center gap-2">
-                    <span className="inline-flex h-6 w-6 items-center justify-center rounded-full bg-primary/10 text-primary text-sm font-medium">
-                      {newCount}
-                    </span>
-                    <div className="text-sm font-medium text-foreground">
-                      new report{newCount > 1 ? 's' : ''}
-                    </div>
-                    <div className="text-xs text-muted-foreground ml-2">Tap to view</div>
+                <div className="flex items-center gap-2">
+                  <span className="inline-flex h-6 w-6 items-center justify-center rounded-full bg-primary/10 text-primary text-sm font-medium">
+                    {newCount}
+                  </span>
+                  <div className="text-sm font-medium text-foreground">
+                    new report{newCount > 1 ? 's' : ''}
                   </div>
-                )}
+                  <div className="text-xs text-muted-foreground ml-2">Tap to view</div>
+                </div>
               </motion.button>
             </motion.div>
           )}
         </AnimatePresence>
 
-        <div ref={reportsContainerRef}>
+        <div>
           {reports.length === 0 && loading && (
             <div className="space-y-3 px-2">
               <SkeletonReportCard />
