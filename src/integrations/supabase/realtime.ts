@@ -1,24 +1,4 @@
-// src/integrations/supabase/realtime.ts
-/**
- * Realtime manager for Supabase (client-side).
- *
- * - Single channel per (entity + serverFilter) key
- * - Cross-tab leader election using localStorage + BroadcastChannel
- * - Only the leader tab opens a Supabase channel (reduces server list_changes calls)
- * - Server-side filter builder (e.g. { report_id: 'abc' } => 'report_id=eq.abc')
- * - Prevent accidental server-wide subscriptions unless allowGlobal: true
- *
- * Usage:
- *   const id = addRealtimeListener({
- *     channelName: 'daily_reports',
- *     table: 'daily_reports',
- *     event: '*',
- *     filter: { report_id: 'abc' },
- *     handler: (payload) => { ... }
- *   });
- *
- *   removeRealtimeListener('daily_reports', id, { report_id: 'abc' });
- */
+// src/integrations/supabase/realtime.ts - OPTIMIZED VERSION
 
 import { supabase } from '@/integrations/supabase/client';
 import type { RealtimePostgresChangesPayload } from '@supabase/supabase-js';
@@ -33,7 +13,7 @@ type Listener = {
 };
 
 type ChannelRecord = {
-  key: string; // channelName + serverFilter key
+  key: string;
   listeners: Listener[];
   subscribed: boolean;
   channel?: ReturnType<typeof supabase['channel']>;
@@ -41,6 +21,7 @@ type ChannelRecord = {
   leaderHeartbeat?: number | null;
   isLeader: boolean;
   __controlListener?: (ev: MessageEvent) => void;
+  lastActivity: number; // ✅ Track activity for cleanup
 };
 
 const channels = new Map<string, ChannelRecord>();
@@ -48,15 +29,16 @@ const channels = new Map<string, ChannelRecord>();
 const TAB_ID = `tab_${Math.random().toString(36).slice(2, 9)}`;
 const LOCK_EXPIRY_MS = 5000;
 const LEADER_REFRESH_MS = 3000;
+const CHANNEL_IDLE_TIMEOUT = 10 * 60 * 1000; // ✅ 10 minutes idle = auto-cleanup
 
 function makeKey(channelName: string, serverFilter?: string) {
   return serverFilter ? `${channelName}::${serverFilter}` : channelName;
 }
+
 function genId(prefix = '') {
   return `${prefix}${Math.random().toString(36).slice(2, 9)}`;
 }
 
-/** build server filter string for Supabase `filter` option */
 function buildServerFilterString(filter?: Record<string, any>) {
   if (!filter || Object.keys(filter).length === 0) return undefined;
   const parts: string[] = [];
@@ -72,12 +54,10 @@ function buildServerFilterString(filter?: Record<string, any>) {
   return parts.join('&');
 }
 
-/** localStorage key for lock */
 function lockKeyFor(key: string) {
   return `realtime-leader:${key}`;
 }
 
-/** Try to acquire leadership for key */
 function tryAcquireLeadership(key: string): boolean {
   const lk = lockKeyFor(key);
   try {
@@ -94,27 +74,23 @@ function tryAcquireLeadership(key: string): boolean {
     }
     const age = now - parsed.ts;
     if (age > LOCK_EXPIRY_MS) {
-      // steal stale lock
       localStorage.setItem(lk, JSON.stringify({ tabId: TAB_ID, ts: now }));
       return true;
     }
     return parsed.tabId === TAB_ID;
-  } catch (e) {
-    // localStorage might be blocked; fallback to assume leadership to avoid blocking functionality
+  } catch {
     return true;
   }
 }
 
-/** Refresh leadership lock timestamp */
 function refreshLeadership(key: string) {
   const lk = lockKeyFor(key);
   try {
     const now = Date.now();
     localStorage.setItem(lk, JSON.stringify({ tabId: TAB_ID, ts: now }));
-  } catch (e) {}
+  } catch {}
 }
 
-/** Release leadership lock if owned */
 function releaseLeadership(key: string) {
   const lk = lockKeyFor(key);
   try {
@@ -124,21 +100,59 @@ function releaseLeadership(key: string) {
     if (parsed && parsed.tabId === TAB_ID) {
       localStorage.removeItem(lk);
     }
-  } catch (e) {}
+  } catch {}
 }
 
-/** Type guards */
 function isControlMessage(obj: unknown): obj is { __control: string } {
   return !!obj && typeof obj === 'object' && '__control' in (obj as object);
 }
+
 function isRealtimePayload(obj: unknown): obj is Payload {
   return !!obj && typeof obj === 'object' && 'eventType' in (obj as object);
 }
 
-/** Ensure channel record exists and attach BroadcastChannel listener */
+// ✅ Periodic cleanup of idle channels
+function cleanupIdleChannels() {
+  const now = Date.now();
+  const toRemove: string[] = [];
+
+  for (const [key, rec] of channels.entries()) {
+    const idle = now - rec.lastActivity;
+    if (idle > CHANNEL_IDLE_TIMEOUT && rec.listeners.length === 0) {
+      toRemove.push(key);
+    }
+  }
+
+  for (const key of toRemove) {
+    const rec = channels.get(key);
+    if (rec) {
+      console.log(`[REALTIME] Cleaning up idle channel: ${key}`);
+      if (rec.isLeader) {
+        unsubscribeServer(rec).catch(() => {});
+      }
+      try {
+        if (rec.__controlListener) {
+          rec.bcEvents.removeEventListener('message', rec.__controlListener);
+        }
+        rec.bcEvents.close();
+      } catch {}
+      channels.delete(key);
+    }
+  }
+}
+
+// Run cleanup every 5 minutes
+if (typeof window !== 'undefined') {
+  setInterval(cleanupIdleChannels, 5 * 60 * 1000);
+}
+
 function ensureChannelRecord(channelName: string, serverFilter?: string) {
   const key = makeKey(channelName, serverFilter);
-  if (channels.has(key)) return channels.get(key)!;
+  if (channels.has(key)) {
+    const rec = channels.get(key)!;
+    rec.lastActivity = Date.now(); // ✅ Update activity
+    return rec;
+  }
 
   const bcEvents = new BroadcastChannel(`realtime-events:${key}`);
 
@@ -151,10 +165,11 @@ function ensureChannelRecord(channelName: string, serverFilter?: string) {
     leaderHeartbeat: null,
     isLeader: false,
     __controlListener: undefined,
+    lastActivity: Date.now(),
   };
 
-  // forward broadcasted payloads to local listeners
   const bcListener = (ev: MessageEvent) => {
+    rec.lastActivity = Date.now(); // ✅ Update on activity
     const raw = ev.data as unknown;
     if (!raw || typeof raw !== 'object') return;
     if (isControlMessage(raw)) return;
@@ -169,12 +184,17 @@ function ensureChannelRecord(channelName: string, serverFilter?: string) {
         const target = payload.eventType === 'DELETE' ? (payload.old ?? {}) : (payload.new ?? {});
         let ok = true;
         for (const k of Object.keys(l.filter)) {
-          if ((target as any)[k] !== l.filter[k]) { ok = false; break; }
+          if ((target as any)[k] !== l.filter[k]) {
+            ok = false;
+            break;
+          }
         }
         if (!ok) continue;
       }
 
-      try { l.handler(payload); } catch (e) { /* swallow */ }
+      try {
+        l.handler(payload);
+      } catch {}
     }
   };
 
@@ -185,8 +205,13 @@ function ensureChannelRecord(channelName: string, serverFilter?: string) {
   return rec;
 }
 
-/** Subscribe to Supabase server channel (leader only) */
-async function subscribeServer(rec: ChannelRecord, channelName: string, table?: string, schema?: string, serverFilter?: string) {
+async function subscribeServer(
+  rec: ChannelRecord,
+  channelName: string,
+  table?: string,
+  schema?: string,
+  serverFilter?: string
+) {
   if (rec.subscribed) return;
   const ch = supabase.channel(`realtime:${rec.key}`);
   rec.channel = ch;
@@ -196,10 +221,12 @@ async function subscribeServer(rec: ChannelRecord, channelName: string, table?: 
   if (serverFilter) onParams.filter = serverFilter;
 
   ch.on('postgres_changes', onParams, (payload: Payload) => {
-    // forward to other tabs via BroadcastChannel
-    try { rec.bcEvents.postMessage(payload); } catch (e) {}
+    rec.lastActivity = Date.now(); // ✅ Update activity
 
-    // dispatch to local listeners (leader)
+    try {
+      rec.bcEvents.postMessage(payload);
+    } catch {}
+
     const ls = Array.from(rec.listeners);
     for (const l of ls) {
       if (l.event !== '*' && payload.eventType !== l.event) continue;
@@ -207,27 +234,32 @@ async function subscribeServer(rec: ChannelRecord, channelName: string, table?: 
         const target = payload.eventType === 'DELETE' ? (payload.old ?? {}) : (payload.new ?? {});
         let ok = true;
         for (const k of Object.keys(l.filter)) {
-          if ((target as any)[k] !== l.filter[k]) { ok = false; break; }
+          if ((target as any)[k] !== l.filter[k]) {
+            ok = false;
+            break;
+          }
         }
         if (!ok) continue;
       }
-      try { l.handler(payload); } catch (e) { /* swallow */ }
+      try {
+        l.handler(payload);
+      } catch {}
     }
   });
 
-  await ch.subscribe(() => { /* can handle status if needed */ });
+  await ch.subscribe(() => {});
 
   rec.subscribed = true;
   rec.isLeader = true;
 
-  // start leadership heartbeat
   rec.leaderHeartbeat = window.setInterval(() => refreshLeadership(rec.key), LEADER_REFRESH_MS);
 }
 
-/** Unsubscribe server channel and cleanup (leader) */
 async function unsubscribeServer(rec: ChannelRecord) {
   if (!rec.subscribed || !rec.channel) return;
-  try { supabase.removeChannel(rec.channel); } catch (e) {}
+  try {
+    supabase.removeChannel(rec.channel);
+  } catch {}
   rec.subscribed = false;
   rec.channel = undefined;
   rec.isLeader = false;
@@ -237,24 +269,18 @@ async function unsubscribeServer(rec: ChannelRecord) {
   }
   releaseLeadership(rec.key);
 
-  // notify other tabs
-  try { rec.bcEvents.postMessage({ __control: 'leader_left' }); } catch (e) {}
+  try {
+    rec.bcEvents.postMessage({ __control: 'leader_left' });
+  } catch {}
 }
 
-/**
- * Public: addRealtimeListener
- *
- * IMPORTANT:
- *  - By default this WILL NOT create a server-wide subscription if no `filter` is provided.
- *  - To intentionally subscribe to the full entity/table, pass `allowGlobal: true`.
- */
 export function addRealtimeListener(opts: {
   channelName: string;
   table?: string;
   schema?: string;
   event?: 'INSERT' | 'UPDATE' | 'DELETE' | '*';
   filter?: Record<string, any>;
-  allowGlobal?: boolean; // explicit opt-in for global subscription
+  allowGlobal?: boolean;
   handler: (payload: Payload) => void;
 }) {
   const serverFilter = buildServerFilterString(opts.filter);
@@ -270,18 +296,15 @@ export function addRealtimeListener(opts: {
     handler: opts.handler,
   });
 
-  // Only attempt to subscribe to Supabase server if we have a serverFilter OR allowGlobal === true
   if (serverFilter || opts.allowGlobal) {
     const acquired = tryAcquireLeadership(key);
     if (acquired) {
       if (!rec.subscribed) {
         subscribeServer(rec, opts.channelName, opts.table, opts.schema, serverFilter).catch(() => {
-          // failed subscribe -> release lock so others can try
           releaseLeadership(key);
         });
       }
     } else {
-      // not leader: listen for leader-left control messages to attempt takeover
       const onControl = (ev: MessageEvent) => {
         const data = ev.data;
         if (isControlMessage(data) && data.__control === 'leader_left') {
@@ -296,34 +319,28 @@ export function addRealtimeListener(opts: {
       rec.bcEvents.addEventListener('message', onControl);
       rec.__controlListener = onControl;
     }
-  } else {
-    // No server subscription will be created — listeners will receive events only from BroadcastChannel.
-    // This prevents accidental global subscriptions that cause heavy list_changes usage.
   }
 
   return id;
 }
 
-/**
- * Public: removeRealtimeListener
- * - channelName: same channelName used during addRealtimeListener
- * - listenerId: id returned by addRealtimeListener
- * - filter: pass the same filter used during registration so key matches
- */
 export function removeRealtimeListener(channelName: string, listenerId: string, filter?: Record<string, any>) {
   const serverFilter = buildServerFilterString(filter);
   const key = makeKey(channelName, serverFilter);
   const rec = channels.get(key);
 
-  // fallback: if exact key not found, try to remove by prefix (helpful if filters differ)
   if (!rec) {
     for (const [k, candidate] of channels.entries()) {
       if (k === channelName || k.startsWith(channelName + '::')) {
-        candidate.listeners = candidate.listeners.filter(l => l.id !== listenerId);
+        candidate.listeners = candidate.listeners.filter((l) => l.id !== listenerId);
+        candidate.lastActivity = Date.now(); // ✅ Update activity
         if (candidate.listeners.length === 0) {
           if (candidate.isLeader) unsubscribeServer(candidate).catch(() => {});
-          try { candidate.bcEvents.close(); } catch (e) {}
-          if (candidate.__controlListener) candidate.bcEvents.removeEventListener('message', candidate.__controlListener);
+          try {
+            candidate.bcEvents.close();
+          } catch {}
+          if (candidate.__controlListener)
+            candidate.bcEvents.removeEventListener('message', candidate.__controlListener);
           channels.delete(k);
         }
         return;
@@ -333,25 +350,29 @@ export function removeRealtimeListener(channelName: string, listenerId: string, 
   }
 
   rec.listeners = rec.listeners.filter((l) => l.id !== listenerId);
+  rec.lastActivity = Date.now(); // ✅ Update activity
 
   if (rec.listeners.length === 0) {
     if (rec.isLeader) {
       unsubscribeServer(rec).catch(() => {});
     }
-    try { if (rec.__controlListener) rec.bcEvents.removeEventListener('message', rec.__controlListener); } catch (e) {}
-    try { rec.bcEvents.close(); } catch (e) {}
+    try {
+      if (rec.__controlListener) rec.bcEvents.removeEventListener('message', rec.__controlListener);
+    } catch {}
+    try {
+      rec.bcEvents.close();
+    } catch {}
     channels.delete(key);
   }
 }
 
-/** Remove all channels and cleanup (admin/teardown) */
 export function removeAllRealtimeChannels() {
   for (const [k, rec] of channels.entries()) {
     try {
       if (rec.isLeader) unsubscribeServer(rec).catch(() => {});
       if (rec.__controlListener) rec.bcEvents.removeEventListener('message', rec.__controlListener);
       rec.bcEvents.close();
-    } catch (e) {}
+    } catch {}
     channels.delete(k);
   }
 }

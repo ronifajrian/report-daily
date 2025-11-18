@@ -1,10 +1,4 @@
 // src/components/dashboard/InfiniteReportsList.tsx
-// Key improvements:
-// 1. Clear filter button in main bar (no need to open sheet)
-// 2. Mobile filter from bottom (Drawer), Desktop from side (Sheet)
-// 3. Optimized animations with proper cleanup
-// 4. Better state management to prevent animation lag
-
 import { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import { Report } from './StaffDashboard';
 import { ReportCard } from './ReportCard';
@@ -12,9 +6,7 @@ import { Loader2, Filter, X } from 'lucide-react';
 import { supabase } from '@/integrations/supabase/client';
 import type { RealtimeChannel } from '@supabase/supabase-js';
 import { useToast } from '@/hooks/use-toast';
-import type { DateRange } from 'react-day-picker';
 import { AnimatePresence, motion } from 'framer-motion';
-import AnimatedNewBanner from '@/components/AnimatedNewBanner';
 import SkeletonReportCard from '@/components/SkeletonReportCard';
 import { ReportDetailModal } from './ReportDetailModal';
 import { Button } from '@/components/ui/button';
@@ -38,7 +30,6 @@ import {
   DrawerTitle,
   DrawerTrigger,
 } from '@/components/ui/drawer';
-
 import { useAuth } from '@/hooks/useAuth';
 import { AuthenticationError } from '@/lib/authErrors';
 
@@ -59,56 +50,61 @@ export const InfiniteReportsList = ({
   const { signOut } = useAuth();
   const isMobile = useIsMobile();
 
-  // visible state
   const [reports, setReports] = useState<Report[]>([]);
   const [loading, setLoading] = useState(false);
   const [page, setPage] = useState(1);
   const [hasMore, setHasMore] = useState(true);
 
-  // filters
   const [statusFilter, setStatusFilter] = useState<string>('all');
   const [userFilter, setUserFilter] = useState<string>('all');
-  const [dateRange, setDateRange] = useState<DateRange | undefined>();
-  const [searchQuery, setSearchQuery] = useState('');
   const [filterOpen, setFilterOpen] = useState(false);
 
-  // refs for stable closures
   const reportsRef = useRef<Report[]>([]);
   const loadingRef = useRef(false);
   const pageRef = useRef(1);
   const hasMoreRef = useRef(true);
 
-  // DOM refs
   const observerTarget = useRef<HTMLDivElement | null>(null);
   const reportsContainerRef = useRef<HTMLDivElement | null>(null);
 
-  // realtime buffer + banner
   const newReportsBufferRef = useRef<Report[]>([]);
   const [newCount, setNewCount] = useState(0);
   const [showNewBanner, setShowNewBanner] = useState(false);
   const [loadingNewReports, setLoadingNewReports] = useState(false);
 
   const latestTimestampRef = useRef<string | null>(null);
-
-  // listener bookkeeping
   const reportsUpdatesListenerRef = useRef<RealtimeChannel | null>(null);
-  const realtimeChannelRef = useRef<string | null>(null);
-  const realtimeFilterRef = useRef<any | undefined>(undefined);
 
-  // Modal state
   const [selectedReportId, setSelectedReportId] = useState<string | null>(null);
   const [detailModalOpen, setDetailModalOpen] = useState(false);
 
-  // sync refs with state
+  const scrollTimeoutRef = useRef<NodeJS.Timeout>();
+  const [isScrolling, setIsScrolling] = useState(false);
+
+  useEffect(() => {
+    const handleScroll = () => {
+      setIsScrolling(true);
+      if (scrollTimeoutRef.current) clearTimeout(scrollTimeoutRef.current);
+      scrollTimeoutRef.current = setTimeout(() => {
+        setIsScrolling(false);
+      }, 150);
+    };
+
+    window.addEventListener('scroll', handleScroll, { passive: true });
+    return () => {
+      window.removeEventListener('scroll', handleScroll);
+      if (scrollTimeoutRef.current) clearTimeout(scrollTimeoutRef.current);
+    };
+  }, []);
+
   useEffect(() => { reportsRef.current = reports; }, [reports]);
   useEffect(() => { loadingRef.current = loading; }, [loading]);
   useEffect(() => { pageRef.current = page; }, [page]);
   useEffect(() => { hasMoreRef.current = hasMore; }, [hasMore]);
 
-  // Memoized values
   const hasActiveFilters = useMemo(
-    () => statusFilter !== 'all' || userFilter !== 'all' || dateRange,
-    [statusFilter, userFilter, dateRange]
+    () => statusFilter !== 'all' || userFilter !== 'all',
+    [statusFilter, userFilter]
   );
 
   const showFilters = useMemo(
@@ -117,49 +113,54 @@ export const InfiniteReportsList = ({
   );
 
   const activeFilterCount = useMemo(() => {
-    return [statusFilter !== 'all', userFilter !== 'all', dateRange].filter(Boolean).length;
-  }, [statusFilter, userFilter, dateRange]);
+    return [statusFilter !== 'all', userFilter !== 'all'].filter(Boolean).length;
+  }, [statusFilter, userFilter]);
 
-  // Clear all filters
   const clearFilters = useCallback(() => {
     setStatusFilter('all');
     setUserFilter('all');
-    setDateRange(undefined);
   }, []);
 
-  // ---------------- safe fetchReports ----------------
+  const abortControllerRef = useRef<AbortController | null>(null);
+
   const fetchReports = useCallback(async (pageNum: number, reset = false) => {
     if (loadingRef.current) return;
+    
+    if (abortControllerRef.current) {
+      abortControllerRef.current.abort();
+    }
+    
+    abortControllerRef.current = new AbortController();
     setLoading(true);
+    
     try {
       const { data: { session } } = await supabase.auth.getSession();
-      if (!session?.access_token) { throw new AuthenticationError("No session token"); }
-
-      const params = new URLSearchParams({ page: pageNum.toString(), limit: '10' });
-      if (userId) params.append('userId', userId);
-      if (statusFilter && statusFilter !== 'all') params.append('status', statusFilter);
-      if (userFilter && userFilter !== 'all') params.append('staffId', userFilter);
-      if (dateRange?.from) {
-        params.append('startDate', dateRange.from.toISOString());
-        if (dateRange.to) params.append('endDate', new Date(dateRange.to.setHours(23,59,59,999)).toISOString());
+      if (!session?.access_token) {
+        throw new AuthenticationError("No session token");
       }
-      if (searchQuery) params.append('q', searchQuery);
 
-      const res = await fetch(`${import.meta.env.VITE_SUPABASE_URL}/functions/v1/get-reports?${params.toString()}`, {
-        headers: { Authorization: `Bearer ${session.access_token}` }
+      const params = new URLSearchParams({ 
+        page: pageNum.toString(), 
+        limit: '15'
       });
+      
+      if (userId) params.append('userId', userId);
+      if (statusFilter !== 'all') params.append('status', statusFilter);
+      if (userFilter !== 'all') params.append('staffId', userFilter);
 
-      // if (res.status === 401 || res.status === 403) {
-      //   window.location.href = '/';
-      //   return;
-      // }
-      // if (!res.ok) throw new Error('Failed to fetch reports');
+      const res = await fetch(
+        `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/get-reports?${params.toString()}`,
+        {
+          headers: { Authorization: `Bearer ${session.access_token}` },
+          signal: abortControllerRef.current.signal
+        }
+      );
 
       if (res.status === 401 || res.status === 403) {
         throw new AuthenticationError("Authentication failed");
       }
       if (!res.ok) {
-        throw new Error(`Failed to fetch reports: ${res.statusText}`);
+        throw new Error(`Failed to fetch: ${res.statusText}`);
       }
 
       const result = await res.json();
@@ -181,64 +182,39 @@ export const InfiniteReportsList = ({
           if (incoming.length === 0) {
             setHasMore(false);
             hasMoreRef.current = false;
-			} else {
+          } else {
             setPage(prev => prev + 1);
             pageRef.current = pageRef.current + 1;
           }
         }
       }
 
-      const serverHasMore = !!result.hasMore;
-      setHasMore(serverHasMore);
-      hasMoreRef.current = serverHasMore;
+      setHasMore(!!result.hasMore);
+      hasMoreRef.current = !!result.hasMore;
 
       if ((reset || pageNum === 1) && incoming.length > 0) {
         latestTimestampRef.current = incoming[0].created_at;
       }
     } catch (err: any) {
+      if (err.name === 'AbortError') {
+        return;
+      }
+      
       if (err instanceof AuthenticationError) {
-        // Ini adalah error auth. Panggil signOut() yang aman
-        console.warn('[InfiniteReportsList] Auth error, triggering sign out.');
-        signOut(); // signOut dari useAuth sudah punya pelindung loop
+        signOut();
       } else {
-        // Ini error lain (jaringan, 500, dll)
-        console.error('Failed to fetch reports:', err);
-        toast?.({ title: 'Error', description: err?.message ?? 'Failed to fetch', variant: 'destructive' });
+        toast?.({ 
+          title: 'Error', 
+          description: err?.message ?? 'Failed to fetch', 
+          variant: 'destructive' 
+        });
       }
     } finally {
       setLoading(false);
+      abortControllerRef.current = null;
     }
-  }, [userId, statusFilter, userFilter, dateRange, searchQuery, toast, signOut]);
+  }, [userId, statusFilter, userFilter, toast, signOut]);
 
-  // -------------- fetchReportsSince (for banner) --------------
-  const fetchReportsSince = useCallback(async (sinceIso: string) => {
-    try {
-      const { data: { session } } = await supabase.auth.getSession();
-      if (!session?.access_token) { throw new AuthenticationError("No session token"); };
-
-      const params = new URLSearchParams({ page: '1', limit: '50', startDate: sinceIso });
-      if (userId) params.append('userId', userId);
-      if (statusFilter && statusFilter !== 'all') params.append('status', statusFilter);
-      if (userFilter && userFilter !== 'all') params.append('staffId', userFilter);
-
-      const res = await fetch(`${import.meta.env.VITE_SUPABASE_URL}/functions/v1/get-reports?${params.toString()}`, {
-        headers: { Authorization: `Bearer ${session.access_token}` }
-      });
-
-      if (res.status === 401 || res.status === 403) {
-        throw new AuthenticationError("Authentication failed");
-      }
-      if (!res.ok) throw new Error('Failed to fetch new reports');
-      
-      const result = await res.json();
-      return result.data ?? [];
-    } catch (e) {
-      console.warn('fetchReportsSince failed', e);
-      throw e;
-    }
-  }, [userId, statusFilter, userFilter ,signOut]);
-
-  // ---------------- initial/reset on filter change ----------------
   useEffect(() => {
     setReports([]);
     setPage(1);
@@ -250,55 +226,66 @@ export const InfiniteReportsList = ({
     setShowNewBanner(false);
 
     fetchReports(1, true);
-  }, [statusFilter, userFilter, dateRange, userId, searchQuery, fetchReports]);
+  }, [statusFilter, userFilter, userId, fetchReports]);
 
-  // ---------------- IntersectionObserver ----------------
   useEffect(() => {
     let observer: IntersectionObserver | null = null;
     let cancelled = false;
 
     const createObserver = () => {
       if (!observerTarget.current) return;
-      observer = new IntersectionObserver(async (entries) => {
-        if (!entries[0].isIntersecting) return;
-        if (loadingRef.current || !hasMoreRef.current) return;
-        if (observer) observer.disconnect();
+      
+      observer = new IntersectionObserver(
+        async (entries) => {
+          if (!entries[0].isIntersecting) return;
+          if (loadingRef.current || !hasMoreRef.current) return;
+          
+          if (observer) observer.disconnect();
 
-        const nextPage = pageRef.current + 1;
-        await fetchReports(nextPage, false);
+          const nextPage = pageRef.current + 1;
+          await fetchReports(nextPage, false);
 
-        setTimeout(() => {
-          if (!cancelled && observer && observerTarget.current && hasMoreRef.current) {
-            try { observer.observe(observerTarget.current); } catch (_) {}
-          }
-        }, 150);
-      }, { threshold: 0.1, root: null, rootMargin: '200px' });
+          setTimeout(() => {
+            if (!cancelled && observer && observerTarget.current && hasMoreRef.current) {
+              try {
+                observer.observe(observerTarget.current!);
+              } catch {}
+            }
+          }, 300);
+        },
+        { 
+          threshold: 0.1, 
+          root: null, 
+          rootMargin: '300px'
+        }
+      );
 
-      try { observer.observe(observerTarget.current!); } catch (_) {}
+      try {
+        observer.observe(observerTarget.current!);
+      } catch {}
     };
 
     createObserver();
+    
     return () => {
       cancelled = true;
-      if (observer) observer.disconnect();
-      observer = null;
+      if (observer) {
+        observer.disconnect();
+        observer = null;
+      }
     };
   }, [fetchReports]);
 
-  // --------------- Realtime ---------------
   useEffect(() => {
     const isStaff = userRole === 'staff';
     const channelName = `reports-sub-${userRole ?? 'anon'}-${userId ?? 'all'}`;
     const filterStr = (isStaff && userId) ? `user_id=eq.${userId}` : undefined;
 
-    realtimeChannelRef.current = channelName;
-    realtimeFilterRef.current = filterStr;
     const chan = supabase.channel(channelName);
 
-    // --- FUNGSI UNTUK LAPORAN BARU ---
     const onInsert = (payload: any) => {
       try {
-        const record = payload?.record ?? payload?.new ?? payload?.payload ?? null;
+        const record = payload?.record ?? payload?.new ?? null;
         if (!record) return;
 
         if (reportsRef.current.some(r => r.id === record.id)) return;
@@ -307,10 +294,9 @@ export const InfiniteReportsList = ({
         newReportsBufferRef.current = [record, ...newReportsBufferRef.current];
         setNewCount(newReportsBufferRef.current.length);
         setShowNewBanner(true);
-      } catch (e) {}
+      } catch {}
     };
 
-    // --- INI SOLUSINYA: FUNGSI UNTUK LAPORAN YANG DI-UPDATE ---
     const onUpdate = (payload: any) => {
       try {
         const updatedRecord = payload?.new ?? payload?.record ?? null;
@@ -318,39 +304,42 @@ export const InfiniteReportsList = ({
 
         setReports(prevReports => {
           const index = prevReports.findIndex(r => r.id === updatedRecord.id);
+          if (index === -1) return prevReports;
 
-          if (index === -1) {
-            return prevReports; // Laporan tidak ada di daftar, abaikan
-          }
-
-          // --- PERBAIKAN ---
-          // 1. Ambil data laporan LAMA (yang punya 'profiles')
           const oldReport = prevReports[index];
+          const mergedReport = { ...oldReport, ...updatedRecord };
           
-          // 2. Gabungkan data lama dengan data baru
-          const mergedReport = { 
-            ...oldReport, // Menyimpan 'profiles' dan data lama lainnya
-            ...updatedRecord // Menimpa 'status', 'rejection_reason', dll.
-          };
-          // --- AKHIR PERBAIKAN ---
-
-          // 3. Buat array baru dengan data yang sudah digabung
           const newReports = [...prevReports];
           newReports[index] = mergedReport as Report;
           return newReports;
         });
-      } catch (e) {
-        console.warn("[REALTIME] Gagal memproses UPDATE:", e);
-      }
+      } catch {}
     };
 
-    // --- SUBSCRIBE KE KEDUA EVENT: INSERT DAN UPDATE ---
     if (filterStr) {
-      chan.on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'daily_reports', filter: filterStr }, onInsert);
-      chan.on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'daily_reports', filter: filterStr }, onUpdate); // <-- TAMBAHKAN INI
+      chan.on('postgres_changes', { 
+        event: 'INSERT', 
+        schema: 'public', 
+        table: 'daily_reports', 
+        filter: filterStr 
+      }, onInsert);
+      chan.on('postgres_changes', { 
+        event: 'UPDATE', 
+        schema: 'public', 
+        table: 'daily_reports', 
+        filter: filterStr 
+      }, onUpdate);
     } else {
-      chan.on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'daily_reports' }, onInsert);
-      chan.on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'daily_reports' }, onUpdate); // <-- TAMBAHKAN INI
+      chan.on('postgres_changes', { 
+        event: 'INSERT', 
+        schema: 'public', 
+        table: 'daily_reports' 
+      }, onInsert);
+      chan.on('postgres_changes', { 
+        event: 'UPDATE', 
+        schema: 'public', 
+        table: 'daily_reports' 
+      }, onUpdate);
     }
 
     const sub = chan.subscribe();
@@ -362,55 +351,26 @@ export const InfiniteReportsList = ({
           supabase.removeChannel(reportsUpdatesListenerRef.current);
           reportsUpdatesListenerRef.current = null;
         } else {
-          try { supabase.removeChannel(chan); } catch (_) {}
+          supabase.removeChannel(chan);
         }
-      } catch (_) {}
+      } catch {}
     };
-  }, [userId, userRole]); // Dependency tetap sama
+  }, [userId, userRole]);
 
-  // ------------- PREPEND -------------
   const onClickShowNew = useCallback(async () => {
-    if (loadingNewReports) return; // Prevent double click
-    
+    if (loadingNewReports) return;
     setLoadingNewReports(true);
-    // const children = Array.from(reportsContainerRef.current?.children ?? []) as HTMLElement[];
-    // let firstVisibleEl: HTMLElement | null = null;
-    // for (const el of children) {
-    //   if (!el.dataset || !el.dataset.reportId) continue;
-    //   const rect = el.getBoundingClientRect();
-    //   if (rect.bottom > 0) { firstVisibleEl = el; break; }
-    // }
-    // const firstVisibleId = firstVisibleEl?.dataset?.reportId ?? null;
-    // const firstVisibleTop = firstVisibleEl ? firstVisibleEl.getBoundingClientRect().top : null;
-
-    // const prevScroll = window.scrollY;
-    // const prevHeight = reportsContainerRef.current?.scrollHeight ?? document.body.scrollHeight;
 
     try {
-      let newItems: Report[] = [];
-      if (latestTimestampRef.current) {
-        newItems = await fetchReportsSince(latestTimestampRef.current);
-        const existingIds = new Set(reportsRef.current.map(r => r.id));
-        newItems = newItems.filter(i => !existingIds.has(i.id));
-      }
-
-      if (newItems.length === 0 && newReportsBufferRef.current.length > 0) {
-        newItems = newReportsBufferRef.current.slice();
-      }
-
-      if (newItems.length === 0) {
-        newReportsBufferRef.current = [];
-        setShowNewBanner(false);
-        setNewCount(0);
-        setLoadingNewReports(false);
-        return;
-      }
-
+      const fallback = newReportsBufferRef.current.slice();
+      
       setReports(prev => {
         const existing = new Set(prev.map(r => r.id));
-        const filtered = newItems.filter(i => !existing.has(i.id));
+        const filtered = fallback.filter(i => !existing.has(i.id));
         const merged = [...filtered, ...prev];
-        if (merged.length > 0) latestTimestampRef.current = merged[0].created_at;
+        if (merged.length > 0) {
+          latestTimestampRef.current = merged[0].created_at;
+        }
         return merged;
       });
 
@@ -419,53 +379,25 @@ export const InfiniteReportsList = ({
       setNewCount(0);
 
       requestAnimationFrame(() => {
-              window.scrollTo({
-                top: 0,
-                behavior: 'smooth'
-              });
-              setLoadingNewReports(false);
-            });
-      } catch (e: any) {
-
-      if (e instanceof AuthenticationError) {
-        console.warn('[InfiniteReportsList] Auth error on show new, signing out.');
-        signOut();
+        window.scrollTo({ top: 0, behavior: 'smooth' });
         setLoadingNewReports(false);
-        return; // Hentikan proses fallback
-      }
-
-	  const fallback = newReportsBufferRef.current.slice();
-      if (fallback.length > 0) {
-        setReports(prev => {
-          const existing = new Set(prev.map(r => r.id));
-          const filtered = fallback.filter(i => !existing.has(i.id));
-          const merged = [...filtered, ...prev];
-          if (merged.length > 0) latestTimestampRef.current = merged[0].created_at;
-          return merged;
-        });
-        newReportsBufferRef.current = [];
-        setShowNewBanner(false);
-        setNewCount(0);
-      }
+      });
+    } catch (e) {
       setLoadingNewReports(false);
-	  }
-  }, [fetchReportsSince, loadingNewReports, signOut]);
+    }
+  }, [loadingNewReports]);
 
-  // handle report click
   const handleReportClick = useCallback((reportId: string) => {
     setSelectedReportId(reportId);
     setDetailModalOpen(true);
   }, []);
 
-  // handle close modal
   const handleCloseDetailModal = useCallback(() => {
     setDetailModalOpen(false);
     setTimeout(() => setSelectedReportId(null), 300);
   }, []);
 
-  // handle report updated - IMPROVED
   const handleReportUpdated = useCallback(() => {
-    // Simple approach: reset everything and fetch from page 1
     setReports([]);
     setPage(1);
     pageRef.current = 1;
@@ -477,10 +409,9 @@ export const InfiniteReportsList = ({
     fetchReports(1, true);
   }, [fetchReports]);
 
-  // Filter Content Component (reusable for both Sheet and Drawer)
-  const FilterContent = () => (
+  // Filter Content
+  const renderFilterContent = () => (
     <div className="space-y-4 py-4">
-      {/* Status Filter */}
       <div className="space-y-2">
         <Label className="text-sm font-medium">Status</Label>
         <Select value={statusFilter} onValueChange={setStatusFilter}>
@@ -496,7 +427,6 @@ export const InfiniteReportsList = ({
         </Select>
       </div>
 
-      {/* Staff Filter */}
       {allUsers.length > 0 && (
         <div className="space-y-2">
           <Label className="text-sm font-medium">Staff</Label>
@@ -516,7 +446,6 @@ export const InfiniteReportsList = ({
         </div>
       )}
 
-      {/* Clear Filters */}
       {hasActiveFilters && (
         <Button 
           variant="ghost" 
@@ -534,15 +463,12 @@ export const InfiniteReportsList = ({
     </div>
   );
 
-  // ---------------- render ----------------
   return (
     <>
       <div className="w-full">
-        {/* Filter Bar for Approver/Admin */}
         {showFilters && (
-          <div className="sticky top-0 z-20 bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/60 border-b mb-4">
+          <div className="sticky top-0 z-20 bg-background/95 backdrop-blur border-b mb-4">
             <div className="flex items-center gap-2 p-3 flex-wrap">
-              {/* Mobile: Drawer from bottom, Desktop: Sheet from left */}
               {isMobile ? (
                 <Drawer open={filterOpen} onOpenChange={setFilterOpen}>
                   <DrawerTrigger asChild>
@@ -560,10 +486,10 @@ export const InfiniteReportsList = ({
                     <DrawerHeader>
                       <DrawerTitle>Filter Reports</DrawerTitle>
                       <DrawerDescription>
-                        Filter reports by status, staff, or date range
+                        Filter reports by status and staff
                       </DrawerDescription>
                     </DrawerHeader>
-                    <FilterContent />
+                    {renderFilterContent()}
                   </DrawerContent>
                 </Drawer>
               ) : (
@@ -583,31 +509,23 @@ export const InfiniteReportsList = ({
                     <SheetHeader>
                       <SheetTitle>Filter Reports</SheetTitle>
                       <SheetDescription>
-                        Filter reports by status, staff, or date range
+                        Filter reports by status and staff
                       </SheetDescription>
                     </SheetHeader>
-                    <FilterContent />
+                    {renderFilterContent()}
                   </SheetContent>
                 </Sheet>
               )}
 
-              {/* Export Button */}
               <ExportReportsDialog userRole={userRole!} />
 
-              {/* Clear Filters Button - Direct access */}
               {hasActiveFilters && (
-                <Button 
-                  variant="ghost" 
-                  size="sm" 
-                  onClick={clearFilters}
-                  className="gap-2"
-                >
+                <Button variant="ghost" size="sm" onClick={clearFilters} className="gap-2">
                   <X className="h-4 w-4" />
                   Clear Filters
                 </Button>
               )}
 
-              {/* Active Filters Display */}
               {hasActiveFilters && (
                 <div className="flex items-center gap-2 ml-auto flex-wrap">
                   {statusFilter !== 'all' && (
@@ -636,13 +554,10 @@ export const InfiniteReportsList = ({
               transition={{ type: 'spring', stiffness: 300, damping: 25 }}
               className="fixed top-4 z-40 w-full md:w-auto md:left-1/2 md:-translate-x-1/2 pointer-events-none"
             >
-              {/* ✅ NEW: Show loading state on banner */}
               <motion.button
                 onClick={onClickShowNew}
                 disabled={loadingNewReports}
                 className="mx-auto w-fit md:mx-0 rounded-full bg-white/95 px-4 py-2 shadow-md border border-gray-100 flex items-center gap-3 focus:outline-none focus:ring-2 focus:ring-primary disabled:opacity-70 disabled:cursor-not-allowed pointer-events-auto"
-                role="status"
-                aria-live="polite"
               >
                 {loadingNewReports ? (
                   <>
@@ -650,20 +565,18 @@ export const InfiniteReportsList = ({
                     <div className="text-sm font-medium text-foreground">Loading...</div>
                   </>
                 ) : (
-                  <>
-                    <div className="flex items-center gap-2">
-                      <span className="inline-flex h-6 w-6 items-center justify-center rounded-full bg-primary/10 text-primary text-sm font-medium">
-                        {newCount}
-                      </span>
-                      <div className="text-sm font-medium text-foreground">
-                        new report{newCount > 1 ? 's' : ''}
-                      </div>
-                      <div className="text-xs text-muted-foreground ml-2">Tap to view</div>
+                  <div className="flex items-center gap-2">
+                    <span className="inline-flex h-6 w-6 items-center justify-center rounded-full bg-primary/10 text-primary text-sm font-medium">
+                      {newCount}
+                    </span>
+                    <div className="text-sm font-medium text-foreground">
+                      new report{newCount > 1 ? 's' : ''}
                     </div>
-                  </>
+                    <div className="text-xs text-muted-foreground ml-2">Tap to view</div>
+                  </div>
                 )}
-              </motion.button>            
-		  </motion.div>
+              </motion.button>
+            </motion.div>
           )}
         </AnimatePresence>
 
@@ -677,18 +590,25 @@ export const InfiniteReportsList = ({
           )}
 
           <div className="space-y-3 px-2">
-			<AnimatePresence initial={false}>
+            <AnimatePresence initial={false}>
               {reports.map((r, idx) => (
-				<motion.div
+                <motion.div
                   key={r.id}
-                  layout
+                  layout={!isScrolling}
                   initial={{ opacity: 0, y: 6 }}
                   animate={{ opacity: 1, y: 0 }}
                   exit={{ opacity: 0, y: -6 }}
-                  transition={{ duration: 0.22, delay: idx * 0.01 }}
+                  transition={{ 
+                    duration: isScrolling ? 0.1 : 0.22, 
+                    delay: isScrolling ? 0 : idx * 0.01 
+                  }}
                 >
                   <div data-report-id={r.id} className="rounded-2xl">
-                    <ReportCard report={r} onClick={() => handleReportClick(r.id)} showAuthor={showAuthor} />
+                    <ReportCard 
+                      report={r} 
+                      onClick={() => handleReportClick(r.id)} 
+                      showAuthor={showAuthor} 
+                    />
                   </div>
                 </motion.div>
               ))}
@@ -700,7 +620,11 @@ export const InfiniteReportsList = ({
           <div className="py-4 text-center">
             {loading && <Loader2 className="inline-block animate-spin" />}
             {!hasMore && reports.length > 0 && (
-              <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="text-sm text-muted-foreground">
+              <motion.div 
+                initial={{ opacity: 0 }} 
+                animate={{ opacity: 1 }} 
+                className="text-sm text-muted-foreground"
+              >
                 No more reports
               </motion.div>
             )}
@@ -717,5 +641,3 @@ export const InfiniteReportsList = ({
     </>
   );
 };
-
-export default InfiniteReportsList;

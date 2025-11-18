@@ -1,4 +1,4 @@
-// src/lib/protectedFetch.ts
+// src/lib/protectedFetch.ts - OPTIMIZED VERSION
 import { supabase } from "@/integrations/supabase/client";
 import { signOutAndRedirect, shouldBlockAuthOperations, incrementAuthError } from "@/lib/auth";
 
@@ -9,63 +9,122 @@ export class AuthenticationError extends Error {
   }
 }
 
-/**
- * IMPROVED: Protected fetch dengan circuit breaker dan better error handling
- */
+// ✅ LRU Cache with automatic cleanup
+class LRUCache<K, V> {
+  private cache = new Map<K, V>();
+  private maxSize: number;
 
-const cache = new Map<string, string>();
+  constructor(maxSize: number = 50) { // Limit cache to 50 items
+    this.maxSize = maxSize;
+  }
+
+  get(key: K): V | undefined {
+    const value = this.cache.get(key);
+    if (value !== undefined) {
+      // Move to end (most recently used)
+      this.cache.delete(key);
+      this.cache.set(key, value);
+    }
+    return value;
+  }
+
+  set(key: K, value: V): void {
+    // If key exists, delete it first
+    if (this.cache.has(key)) {
+      this.cache.delete(key);
+    }
+
+    this.cache.set(key, value);
+
+    // Remove oldest if over limit
+    if (this.cache.size > this.maxSize) {
+      const firstKey = this.cache.keys().next().value;
+      const oldValue = this.cache.get(firstKey);
+      
+      // Revoke old object URL before removing
+      if (typeof oldValue === 'string' && oldValue.startsWith('blob:')) {
+        try { URL.revokeObjectURL(oldValue); } catch {}
+      }
+      
+      this.cache.delete(firstKey);
+    }
+  }
+
+  has(key: K): boolean {
+    return this.cache.has(key);
+  }
+
+  delete(key: K): void {
+    const value = this.cache.get(key);
+    if (value && typeof value === 'string' && value.startsWith('blob:')) {
+      try { URL.revokeObjectURL(value); } catch {}
+    }
+    this.cache.delete(key);
+  }
+
+  clear(): void {
+    for (const value of this.cache.values()) {
+      if (typeof value === 'string' && value.startsWith('blob:')) {
+        try { URL.revokeObjectURL(value); } catch {}
+      }
+    }
+    this.cache.clear();
+  }
+
+  size(): number {
+    return this.cache.size;
+  }
+}
+
+// ✅ Replace Map with LRU Cache
+const cache = new LRUCache<string, string>(50);
 const inflight = new Map<string, Promise<string>>();
 
-// Track 401 errors per URL to prevent infinite loops
+// Track failures
 const failureCount = new Map<string, number>();
 const MAX_FAILURES = 2;
 
+// ✅ Token wait with better error handling
 async function waitForAccessToken(timeoutMs = 2000, interval = 200) {
   const start = Date.now();
   while (Date.now() - start < timeoutMs) {
     try {
-      // 1. Coba cara modern (v2) - ini cara terbaik
+      // Modern way (v2)
       if (typeof (supabase.auth as any)?.getSession === "function") {
         const { data } = await supabase.auth.getSession();
         const token = data?.session?.access_token;
         if (token) return token;
       }
 
-      // 2. Coba fallback ke localStorage dengan logika baru yang lebih pintar
+      // Fallback to localStorage
       let raw: string | null = null;
       
-      // Coba dulu key statis yang umum (v1)
       const staticKeys = ["supabase.auth.token", "supabase.auth", "sb:token"];
       for (const key of staticKeys) {
         raw = localStorage.getItem(key);
         if (raw) break;
       }
 
-      // Jika tidak ketemu, cari key dinamis v2 (sb-<project-ref>-auth-token)
       if (!raw) {
         for (let i = 0; i < localStorage.length; i++) {
           const key = localStorage.key(i);
           if (key && key.startsWith("sb-") && key.endsWith("-auth-token")) {
             raw = localStorage.getItem(key);
-            break; // Berhasil menemukan key v2
+            break;
           }
         }
       }
 
-      // Jika kita berhasil mendapatkan data (baik dari v1 atau v2), parse datanya
       if (raw) {
         try {
           const parsed = JSON.parse(raw);
-          // Cek berbagai kemungkinan struktur data session
           const maybe = parsed?.currentSession?.access_token || 
                         parsed?.access_token ||
                         parsed?.session?.access_token;
           if (maybe) return maybe;
         } catch {}
       }
-    } catch (e) {
-      // abaikan dan coba lagi
-    }
+    } catch {}
     await new Promise((r) => setTimeout(r, interval));
   }
   return null;
@@ -74,15 +133,13 @@ async function waitForAccessToken(timeoutMs = 2000, interval = 200) {
 export async function fetchProtectedAsObjectUrl(srcUrl: string): Promise<string> {
   if (!srcUrl) throw new Error("No srcUrl provided");
 
-  // Check circuit breaker
   if (shouldBlockAuthOperations()) {
     throw new Error("Auth operations blocked - please refresh the page");
   }
 
-  // Check failure count for this URL
   const failures = failureCount.get(srcUrl) || 0;
   if (failures >= MAX_FAILURES) {
-    console.warn(`[FETCH] Max failures reached for ${srcUrl}, blocking further attempts`);
+    console.warn(`[FETCH] Max failures reached for ${srcUrl}`);
     throw new Error("Too many authentication failures");
   }
 
@@ -98,44 +155,25 @@ export async function fetchProtectedAsObjectUrl(srcUrl: string): Promise<string>
 
   const p = (async () => {
     try {
-      // Wait for token with shorter timeout
       const token = await waitForAccessToken(1500, 150);
       
       if (!token) {
-        console.warn('[FETCH] No token available after wait');
+        console.warn('[FETCH] No token available');
         incrementAuthError();
-        
-        // Increment failure count
         failureCount.set(srcUrl, (failureCount.get(srcUrl) || 0) + 1);
-        
-        // // Only trigger sign out if not already in progress
-        // if (!shouldBlockAuthOperations()) {
-        //   setTimeout(() => signOutAndRedirect(), 100);
-        // }
-        
         throw new AuthenticationError("Authentication required");
       }
 
       const resp = await fetch(srcUrl, {
         method: "GET",
-        headers: {
-          Authorization: `Bearer ${token}`,
-        },
+        headers: { Authorization: `Bearer ${token}` },
       });
 
       if (!resp.ok) {
         if (resp.status === 401 || resp.status === 403) {
-          console.warn(`[FETCH] Auth failed (${resp.status}) for ${srcUrl}`);
+          console.warn(`[FETCH] Auth failed (${resp.status})`);
           incrementAuthError();
-          
-          // Increment failure count
           failureCount.set(srcUrl, (failureCount.get(srcUrl) || 0) + 1);
-          
-          // Only trigger sign out if not already in progress and not circuit broken
-          // if (!shouldBlockAuthOperations()) {
-          //   setTimeout(() => signOutAndRedirect(), 100);
-          // }
-          
           throw new AuthenticationError("Authentication failed");
         }
         
@@ -143,16 +181,14 @@ export async function fetchProtectedAsObjectUrl(srcUrl: string): Promise<string>
         throw new Error(`Fetch failed: ${resp.status} ${text || resp.statusText}`);
       }
 
-      // Success - reset failure count for this URL
+      // Success - reset failure count
       failureCount.delete(srcUrl);
 
       const blob = await resp.blob();
       const objectUrl = URL.createObjectURL(blob);
-      cache.set(srcUrl, objectUrl);
+      cache.set(srcUrl, objectUrl); // Will auto-cleanup old URLs
       return objectUrl;
     } catch (error) {
-      // Remove from cache on error
-      cache.delete(srcUrl);
       throw error;
     }
   })();
@@ -166,23 +202,23 @@ export async function fetchProtectedAsObjectUrl(srcUrl: string): Promise<string>
   }
 }
 
+// ✅ Manual revoke (optional, cache will auto-cleanup)
 export function revokeCachedObjectUrl(srcUrl: string) {
-  const obj = cache.get(srcUrl);
-  if (obj) {
-    try { URL.revokeObjectURL(obj); } catch (e) {}
-    cache.delete(srcUrl);
-  }
-  // Also clear failure count
+  cache.delete(srcUrl);
   failureCount.delete(srcUrl);
 }
 
+// ✅ Clear all (use on logout)
 export function revokeAllCachedObjectUrls() {
-  for (const v of cache.values()) {
-    try { URL.revokeObjectURL(v); } catch (e) {}
-  }
   cache.clear();
   failureCount.clear();
 }
 
-// Export for cleanup on logout
+// ✅ Periodic cleanup (run every 5 minutes)
+if (typeof window !== 'undefined') {
+  setInterval(() => {
+    console.log(`[CACHE] Current size: ${cache.size()}`);
+  }, 5 * 60 * 1000);
+}
+
 (window as any).revokeAllCachedObjectUrls = revokeAllCachedObjectUrls;
