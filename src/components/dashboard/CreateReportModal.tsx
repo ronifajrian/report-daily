@@ -5,12 +5,9 @@ import { supabase } from "@/integrations/supabase/client";
 import { useToast } from "@/hooks/use-toast";
 import { uploadFileToWorker } from "@/lib/upload";
 import { fileServeUrl } from "@/lib/storage";
-
 import {
   Dialog,
   DialogContent,
-  DialogHeader,
-  DialogTitle
 } from '@/components/ui/dialog';
 import { Button } from '@/components/ui/button';
 import TextareaAutosize from "react-textarea-autosize";
@@ -21,8 +18,13 @@ import {
   Paperclip,
   Loader2,
   Send,
-  AlertCircle
+  AlertCircle,
+  ImageIcon,
+  FileText,
+  Video,
+  Check
 } from 'lucide-react';
+import { motion, AnimatePresence } from 'framer-motion';
 
 interface CreateReportModalProps {
   open: boolean;
@@ -38,13 +40,8 @@ export const CreateReportModal = ({ open, onOpenChange, onSuccess }: CreateRepor
   const [description, setDescription] = useState("");
   const [files, setFiles] = useState<File[]>([]);
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const [focusedInput, setFocusedInput] = useState(false);
 
-  // keyboard / viewport handling
-  const [isInputActive, setIsInputActive] = useState(false);
-  const [keyboardHeight, setKeyboardHeight] = useState(0);
-  const [isMobile, setIsMobile] = useState(false);
-
-  const textareaBlurTimeoutRef = useRef<number | null>(null);
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
@@ -52,16 +49,14 @@ export const CreateReportModal = ({ open, onOpenChange, onSuccess }: CreateRepor
     if (!isOpen) {
       setDescription("");
       setFiles([]);
-      setIsInputActive(false);
-      setKeyboardHeight(0);
+      setFocusedInput(false);
     }
     onOpenChange(isOpen);
   };
 
-  // Normalisasi nama & inisial
+  // Normalize user name & initials
   const { userInitials, formattedName } = useMemo(() => {
     const rawName = user?.user_metadata?.full_name || "ME";
-
     const formatted = rawName
       .toLowerCase()
       .split(' ')
@@ -152,284 +147,251 @@ export const CreateReportModal = ({ open, onOpenChange, onSuccess }: CreateRepor
     }
   };
 
-  const renderLocationStatus = () => {
+  const getFileIcon = (file: File) => {
+    if (file.type.startsWith('image/')) return <ImageIcon className="h-4 w-4" />;
+    if (file.type.startsWith('video/')) return <Video className="h-4 w-4" />;
+    return <FileText className="h-4 w-4" />;
+  };
+
+  const formatFileSize = (bytes: number) => {
+    if (bytes < 1024) return bytes + ' B';
+    if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(1) + ' KB';
+    return (bytes / (1024 * 1024)).toFixed(1) + ' MB';
+  };
+
+  const renderLocationButton = () => {
     if (locationStatus === 'loading') {
       return (
-        <div className="flex items-center gap-2 text-xs text-primary bg-primary/10 px-3 py-1 rounded-full animate-pulse">
-          <Loader2 className="h-3 w-3 animate-spin" />
-          <span>Locating...</span>
-        </div>
+        <motion.div
+          initial={{ scale: 0.9, opacity: 0 }}
+          animate={{ scale: 1, opacity: 1 }}
+          className="flex items-center gap-2 px-3 py-2 rounded-xl bg-blue-50 dark:bg-blue-950/30 border border-blue-200 dark:border-blue-800"
+        >
+          <Loader2 className="h-4 w-4 animate-spin text-blue-600" />
+          <span className="text-xs font-medium text-blue-700 dark:text-blue-400">Getting location...</span>
+        </motion.div>
       );
     }
+
     if (locationStatus === 'denied') {
       return (
-        <button onClick={openPermissionHelp} className="flex items-center gap-2 text-xs text-destructive bg-destructive/10 px-3 py-1 rounded-full hover:bg-destructive/20 transition-colors">
-          <AlertCircle className="h-3 w-3" />
-          <span>Disabled</span>
-        </button>
+        <motion.button
+          whileHover={{ scale: 1.02 }}
+          whileTap={{ scale: 0.98 }}
+          onClick={openPermissionHelp}
+          className="flex items-center gap-2 px-3 py-2 rounded-xl bg-red-50 dark:bg-red-950/30 border border-red-200 dark:border-red-800 hover:bg-red-100 dark:hover:bg-red-950/50 transition-colors"
+        >
+          <AlertCircle className="h-4 w-4 text-red-600" />
+          <span className="text-xs font-medium text-red-700 dark:text-red-400">Location disabled</span>
+        </motion.button>
       );
     }
+
     if (locationStatus === 'success' && location) {
       return (
-        <div className="flex items-center gap-2 text-xs text-emerald-600 bg-emerald-50 border border-emerald-100 px-3 py-1 rounded-full cursor-default">
-          <MapPin className="h-3 w-3 fill-emerald-600" />
-          <span>{Math.round(location.accuracy)}m</span>
-        </div>
+        <motion.div
+          initial={{ scale: 0.9, opacity: 0 }}
+          animate={{ scale: 1, opacity: 1 }}
+          className="flex items-center gap-2 px-3 py-2 rounded-xl bg-emerald-50 dark:bg-emerald-950/30 border border-emerald-200 dark:border-emerald-800"
+        >
+          <MapPin className="h-4 w-4 fill-emerald-600 text-emerald-600" />
+          <span className="text-xs font-medium text-emerald-700 dark:text-emerald-400">
+            {Math.round(location.accuracy)}m accuracy
+          </span>
+          <Check className="h-3 w-3 text-emerald-600" />
+        </motion.div>
       );
     }
+
     return (
-      <button onClick={requestLocation} className="flex items-center gap-2 text-xs text-muted-foreground bg-muted hover:bg-muted/80 hover:text-primary px-3 py-1 rounded-full transition-all group">
-        <MapPin className="h-3 w-3 group-hover:text-primary transition-colors" />
-        <span>Add Location</span>
-      </button>
+      <motion.button
+        whileHover={{ scale: 1.02 }}
+        whileTap={{ scale: 0.98 }}
+        onClick={requestLocation}
+        className="flex items-center gap-2 px-3 py-2 rounded-xl bg-gray-50 dark:bg-gray-900 border border-gray-200 dark:border-gray-800 hover:bg-gray-100 dark:hover:bg-gray-800 hover:border-primary transition-all group"
+      >
+        <MapPin className="h-4 w-4 text-gray-600 dark:text-gray-400 group-hover:text-primary transition-colors" />
+        <span className="text-xs font-medium text-gray-700 dark:text-gray-300 group-hover:text-primary transition-colors">Add location</span>
+      </motion.button>
     );
   };
 
-  // Cleanup blur timeout on unmount
-  useEffect(() => {
-    return () => {
-      if (textareaBlurTimeoutRef.current) {
-        window.clearTimeout(textareaBlurTimeoutRef.current);
-        textareaBlurTimeoutRef.current = null;
-      }
-    };
-  }, []);
-
-  // visualViewport / keyboard detection with fallback
-  useEffect(() => {
-    const vv = (typeof window !== "undefined" ? (window as any).visualViewport : undefined);
-
-    const computeKeyboard = () => {
-      const full = window.innerHeight || (document.documentElement?.clientHeight ?? 0);
-
-      if (!vv) {
-        // fallback: we can't reliably know kb height, so set to 0
-        setKeyboardHeight(0);
-        return;
-      }
-
-      // keyboardHeight ≈ full window height - visualViewport.height - offsetTop
-      const kb = Math.max(0, full - (vv.height || 0) - (vv.offsetTop || 0));
-      setKeyboardHeight(kb);
-    };
-
-    // detect mobile-ish by width
-    const detectMobile = () => {
-      setIsMobile((typeof window !== "undefined") ? window.innerWidth < 640 : false);
-    };
-
-    if (vv) {
-      vv.addEventListener("resize", computeKeyboard);
-      vv.addEventListener("scroll", computeKeyboard);
-      // initial
-      computeKeyboard();
-    } else {
-      window.addEventListener("resize", computeKeyboard);
-      computeKeyboard();
-    }
-
-    window.addEventListener("resize", detectMobile);
-    detectMobile();
-
-    return () => {
-      if (vv) {
-        vv.removeEventListener("resize", computeKeyboard);
-        vv.removeEventListener("scroll", computeKeyboard);
-      } else {
-        window.removeEventListener("resize", computeKeyboard);
-      }
-      window.removeEventListener("resize", detectMobile);
-    };
-  }, []);
-
-  // textarea focus/blur handlers with small debounce and scrollIntoView
-  const handleTextareaFocus = () => {
-    if (textareaBlurTimeoutRef.current) {
-      window.clearTimeout(textareaBlurTimeoutRef.current);
-      textareaBlurTimeoutRef.current = null;
-    }
-    setIsInputActive(true);
-
-    // give browser a moment to adjust visualViewport, then scroll textarea into center
-    setTimeout(() => {
-      try {
-        textareaRef.current?.scrollIntoView({ behavior: "smooth", block: "center" });
-      } catch {
-        // ignore in case browser blocks scroll
-      }
-    }, 120);
-  };
-  const handleTextareaBlur = () => {
-    textareaBlurTimeoutRef.current = window.setTimeout(() => {
-      setIsInputActive(false);
-      textareaBlurTimeoutRef.current = null;
-    }, 120);
-  };
-
-  // compute top offset: prefer visualViewport.offsetTop when available (accounts for browser UI)
-  let pinnedTop = 8;
-  if (typeof window !== "undefined") {
-    const vv = (window as any).visualViewport;
-    if (vv && typeof vv.offsetTop === "number") {
-      pinnedTop = Math.max(6, vv.offsetTop + 6);
-    } else {
-      pinnedTop = 8;
-    }
-  }
-
-  // determine autosize rows: slightly lower max rows on mobile
-  const maxRows = isMobile ? 10 : 15;
-  const minRows = 5; // bigger textarea by default
+  const canSubmit = description.trim() && !isSubmitting && locationStatus !== 'loading' && locationStatus !== 'denied';
 
   return (
     <Dialog open={open} onOpenChange={handleOpenChange}>
-      <DialogContent
-        className={`
-          sm:max-w-xl w-[95%] rounded-2xl p-0 gap-0 overflow-hidden border shadow-2xl bg-card focus:outline-none outline-none transition-all
-        `}
-        // When input is active, force a mobile-friendly pinned top position and leave space for keyboard.
-        style={
-          isInputActive
-            ? {
-                position: "fixed",
-                left: "50%",
-                transform: "translateX(-50%)",
-                top: `${pinnedTop}px`,
-                // leave space from bottom equal to keyboardHeight + safe margin + notch safe area
-                bottom: `calc(${Math.max(8, keyboardHeight + 8)}px + env(safe-area-inset-bottom))`,
-                // limit height so inner content scrolls (avoid modal being pushed under keyboard)
-                maxHeight: `calc(100vh - ${Math.max(160, keyboardHeight + pinnedTop + 40)}px)`,
-                overflow: "auto",
-                zIndex: 9999,
-              } as React.CSSProperties
-            : undefined
-        }
-      >
-        {/* Reduced header padding, cleaner title */}
-        <DialogHeader className="px-4 py-3 border-b flex flex-row items-center justify-between bg-background/95 backdrop-blur-sm">
-          <DialogTitle className="text-sm font-semibold">New Report</DialogTitle>
-        </DialogHeader>
-
-        {/* Body: tighter spacing, larger textarea area */}
-        <div className="p-4 flex gap-3 bg-background min-h-[160px]">
-          <div className="flex-shrink-0">
-            <Avatar className="h-9 w-9 border ring-0">
-              <AvatarImage src={user?.user_metadata?.avatar_url} />
-              <AvatarFallback className="text-xs font-bold bg-primary/10 text-primary">
-                {userInitials}
-              </AvatarFallback>
-            </Avatar>
-          </div>
-
-          <div className="flex-1 flex flex-col gap-2">
-            <div className="text-sm font-medium text-foreground/90 ml-1">
-              {formattedName}
-            </div>
-
-            <div className="relative">
-              <TextareaAutosize
-                ref={textareaRef}
-                placeholder="What's happening on the field?"
-                value={description}
-                onChange={(e) => setDescription(e.target.value)}
-                onFocus={handleTextareaFocus}
-                onBlur={handleTextareaBlur}
-                minRows={minRows}
-                maxRows={maxRows}
-                disabled={isSubmitting}
-                className={`
-                  w-full
-                  resize-none
-                  border
-                  border-gray-200
-                  dark:border-neutral-700
-                  rounded-lg
-                  p-3
-                  text-base sm:text-lg
-                  placeholder:text-muted-foreground/50
-                  focus-visible:ring-2 focus-visible:ring-primary/30
-                  focus:border-primary
-                  bg-white
-                  dark:bg-slate-900
-                  shadow-sm
-                  transition-shadow
-                  outline-none
-                `}
-                style={{
-                  // keep a smooth line-height and nice caret area
-                  lineHeight: 1.5,
-                }}
-              />
-            </div>
-
-            {files.length > 0 && (
-              <div className="flex gap-3 overflow-x-auto py-2 scrollbar-hide mt-1">
-                {files.map((f, i) => (
-                  <div key={i} className="relative group flex-shrink-0">
-                    <div className="h-14 w-14 rounded-xl bg-muted border flex items-center justify-center overflow-hidden">
-                      {f.type.startsWith('image/') ? (
-                        <img src={URL.createObjectURL(f)} alt="preview" className="h-full w-full object-cover" />
-                      ) : (
-                        <span className="text-[10px] text-muted-foreground px-1 text-center break-all leading-tight">
-                          {f.name.slice(-12)}
-                        </span>
-                      )}
-                    </div>
-                    <button
-                      onClick={() => removeFile(i)}
-                      className="absolute -top-2 -right-2 bg-background border shadow-sm text-foreground rounded-full p-1 hover:bg-destructive hover:text-white transition-colors"
-                      aria-label="remove file"
-                    >
-                      <X className="h-3 w-3" />
-                    </button>
-                  </div>
-                ))}
+      <DialogContent className="sm:max-w-2xl w-[95%] p-0 gap-0 overflow-hidden border-0 shadow-2xl bg-gradient-to-b from-background to-muted/20">
+        {/* Modern Header */}
+        <div className="relative overflow-hidden border-b bg-gradient-to-r from-primary/5 via-primary/10 to-primary/5">
+          <div className="absolute inset-0 bg-grid-white/5 [mask-image:linear-gradient(0deg,transparent,black)]" />
+          <div className="relative px-6 py-4 flex items-center justify-between">
+            <div className="flex items-center gap-3">
+              <Avatar className="h-10 w-10 border-2 border-primary/20 ring-2 ring-primary/10">
+                <AvatarImage src={user?.user_metadata?.avatar_url} />
+                <AvatarFallback className="text-sm font-bold bg-gradient-to-br from-primary to-primary/60 text-primary-foreground">
+                  {userInitials}
+                </AvatarFallback>
+              </Avatar>
+              <div>
+                <h3 className="font-semibold text-base">{formattedName}</h3>
+                <p className="text-xs text-muted-foreground">Create new report</p>
               </div>
-            )}
+            </div>
           </div>
         </div>
 
-        {/* Compact footer */}
-        <div className="px-4 py-3 bg-muted/30 border-t flex items-center justify-between">
-          <div className="flex items-center gap-2">
+        {/* Scrollable Body */}
+        <div className="max-h-[60vh] overflow-y-auto px-6 py-6 space-y-6">
+          {/* Textarea - Enhanced */}
+          <div className="relative">
+            <TextareaAutosize
+              ref={textareaRef}
+              placeholder="What's happening on the field today? Share your progress, challenges, or observations..."
+              value={description}
+              onChange={(e) => setDescription(e.target.value)}
+              onFocus={() => setFocusedInput(true)}
+              onBlur={() => setFocusedInput(false)}
+              minRows={6}
+              maxRows={12}
+              disabled={isSubmitting}
+              className={`
+                w-full resize-none rounded-2xl border-2 p-4 text-base
+                placeholder:text-muted-foreground/60
+                focus-visible:ring-4 focus-visible:ring-primary/20
+                transition-all duration-200
+                bg-white dark:bg-slate-950
+                ${focusedInput ? 'border-primary shadow-lg shadow-primary/10' : 'border-gray-200 dark:border-gray-800'}
+              `}
+              style={{ lineHeight: 1.6 }}
+            />
+            <div className="absolute bottom-3 right-3 text-xs text-muted-foreground pointer-events-none">
+              {description.length} / 5000
+            </div>
+          </div>
+
+          {/* File Upload Area - Enhanced */}
+          <div className="space-y-3">
             <input
               type="file"
               multiple
               className="hidden"
               ref={fileInputRef}
               onChange={handleFileSelect}
-              accept=".jpg,.jpeg,.png,.pdf,.doc,.docx,.mp4"
+              accept=".jpg,.jpeg,.png,.pdf,.doc,.docx,.mp4,.mov"
             />
-
-            <button
+            
+            <motion.button
+              whileHover={{ scale: 1.01 }}
+              whileTap={{ scale: 0.99 }}
               onClick={() => fileInputRef.current?.click()}
               disabled={isSubmitting}
-              title="Attach Files"
-              className="flex items-center justify-center p-2 rounded-full hover:bg-muted/60 transition"
+              className="w-full p-6 rounded-2xl border-2 border-dashed border-gray-300 dark:border-gray-700 hover:border-primary hover:bg-primary/5 transition-all duration-200 group disabled:opacity-50 disabled:cursor-not-allowed"
             >
-              <Paperclip className="h-5 w-5 text-primary" />
-            </button>
+              <div className="flex flex-col items-center gap-3">
+                <div className="p-3 rounded-full bg-primary/10 group-hover:bg-primary/20 transition-colors">
+                  <Paperclip className="h-6 w-6 text-primary" />
+                </div>
+                <div>
+                  <p className="text-sm font-medium text-foreground">Attach files</p>
+                  <p className="text-xs text-muted-foreground mt-1">
+                    Images, videos, or documents (max 10MB each)
+                  </p>
+                </div>
+              </div>
+            </motion.button>
 
-            {renderLocationStatus()}
+            {/* File Previews - Enhanced */}
+            <AnimatePresence mode="popLayout">
+              {files.length > 0 && (
+                <motion.div
+                  initial={{ opacity: 0, height: 0 }}
+                  animate={{ opacity: 1, height: 'auto' }}
+                  exit={{ opacity: 0, height: 0 }}
+                  className="space-y-2"
+                >
+                  <p className="text-sm font-medium text-muted-foreground">
+                    {files.length} file{files.length !== 1 ? 's' : ''} attached
+                  </p>
+                  
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                    {files.map((file, idx) => (
+                      <motion.div
+                        key={idx}
+                        layout
+                        initial={{ opacity: 0, scale: 0.9 }}
+                        animate={{ opacity: 1, scale: 1 }}
+                        exit={{ opacity: 0, scale: 0.9 }}
+                        className="group relative flex items-center gap-3 p-3 rounded-xl bg-muted/50 border border-border hover:border-primary/50 transition-all"
+                      >
+                        {file.type.startsWith('image/') ? (
+                          <div className="relative h-12 w-12 rounded-lg overflow-hidden bg-muted flex-shrink-0">
+                            <img
+                              src={URL.createObjectURL(file)}
+                              alt="preview"
+                              className="h-full w-full object-cover"
+                            />
+                          </div>
+                        ) : (
+                          <div className="h-12 w-12 rounded-lg bg-primary/10 flex items-center justify-center flex-shrink-0">
+                            {getFileIcon(file)}
+                          </div>
+                        )}
+                        
+                        <div className="flex-1 min-w-0">
+                          <p className="text-sm font-medium truncate">{file.name}</p>
+                          <p className="text-xs text-muted-foreground">{formatFileSize(file.size)}</p>
+                        </div>
+
+                        <motion.button
+                          whileHover={{ scale: 1.1 }}
+                          whileTap={{ scale: 0.9 }}
+                          onClick={() => removeFile(idx)}
+                          className="flex-shrink-0 p-1.5 rounded-full bg-background border border-border hover:bg-destructive hover:border-destructive hover:text-destructive-foreground transition-colors"
+                        >
+                          <X className="h-3 w-3" />
+                        </motion.button>
+                      </motion.div>
+                    ))}
+                  </div>
+                </motion.div>
+              )}
+            </AnimatePresence>
           </div>
+        </div>
 
-          <Button
-            onClick={handleSubmit}
-            disabled={!description.trim() || isSubmitting || locationStatus === 'loading' || locationStatus === 'denied'}
-            className="rounded-full px-4 py-2 font-medium shadow-md flex items-center gap-2"
-          >
-            {isSubmitting ? (
-              <>
-                <Loader2 className="h-4 w-4 animate-spin" />
-                Sending
-              </>
-            ) : (
-              <>
-                Post
-                <Send className="h-4 w-4" />
-              </>
-            )}
-          </Button>
+        {/* Modern Footer */}
+        <div className="border-t bg-muted/30 px-6 py-4">
+          <div className="flex items-center justify-between gap-4">
+            <div className="flex items-center gap-2">
+              {renderLocationButton()}
+            </div>
+
+            <motion.div
+              whileHover={{ scale: canSubmit ? 1.02 : 1 }}
+              whileTap={{ scale: canSubmit ? 0.98 : 1 }}
+            >
+              <Button
+                onClick={handleSubmit}
+                disabled={!canSubmit}
+                className="relative rounded-xl px-6 py-2.5 font-semibold shadow-lg disabled:opacity-50 disabled:cursor-not-allowed overflow-hidden group"
+              >
+                <div className="absolute inset-0 bg-gradient-to-r from-primary to-primary/80 opacity-0 group-hover:opacity-100 transition-opacity" />
+                <div className="relative flex items-center gap-2">
+                  {isSubmitting ? (
+                    <>
+                      <Loader2 className="h-4 w-4 animate-spin" />
+                      <span>Posting...</span>
+                    </>
+                  ) : (
+                    <>
+                      <span>Post Report</span>
+                      <Send className="h-4 w-4" />
+                    </>
+                  )}
+                </div>
+              </Button>
+            </motion.div>
+          </div>
         </div>
       </DialogContent>
     </Dialog>
