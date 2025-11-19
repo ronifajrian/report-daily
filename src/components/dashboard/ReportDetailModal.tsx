@@ -1,4 +1,4 @@
-// src/components/dashboard/ReportDetailModal.tsx
+// src/components/dashboard/ReportDetailModal.tsx - FINAL ENHANCED VERSION
 import { useState, useEffect, useCallback } from "react";
 import { supabase } from "@/integrations/supabase/client";
 import { useAuth } from "@/hooks/useAuth";
@@ -24,6 +24,7 @@ import {
   XCircle,
   MapPin,
   ArrowLeft,
+  AlertCircle,
 } from "lucide-react";
 import { ImageThumbnail, VideoThumbnail, FileThumbnail } from "./AttachmentThumbnails";
 import { AttachmentCarouselPreview } from "./AttachmentCarouselPreview";
@@ -33,6 +34,8 @@ import { fileServeUrl } from "@/lib/storage";
 import { Sheet, SheetContent, SheetTitle, SheetDescription } from "@/components/ui/sheet";
 import { VisuallyHidden } from "@radix-ui/react-visually-hidden";
 import { ReportDetailSkeleton } from "./ReportDetailSkeleton";
+import { Alert, AlertDescription } from "@/components/ui/alert";
+import { Separator } from "@/components/ui/separator"; 
 
 interface ReportFile {
   id: string;
@@ -59,9 +62,16 @@ interface ReportDetailModalProps {
   open: boolean;
   onClose: () => void;
   onReportUpdated?: () => void;
+  onReportDeleted?: (reportId: string) => void; 
 }
 
-export const ReportDetailModal = ({ reportId, open, onClose, onReportUpdated }: ReportDetailModalProps) => {
+export const ReportDetailModal = ({ 
+  reportId, 
+  open, 
+  onClose, 
+  onReportUpdated,
+  onReportDeleted
+}: ReportDetailModalProps) => {
   const { user, userRole } = useAuth();
   const { toast } = useToast();
 
@@ -77,9 +87,15 @@ export const ReportDetailModal = ({ reportId, open, onClose, onReportUpdated }: 
   const [previewOpen, setPreviewOpen] = useState(false);
   const [previewInitialIndex, setPreviewInitialIndex] = useState(0);
   const [isDeletingMap, setIsDeletingMap] = useState<Record<string, boolean>>({});
+  
+  const [reportNotFound, setReportNotFound] = useState(false);
+  const [isDeleting, setIsDeleting] = useState(false);
 
   useEffect(() => {
     if (open && reportId) {
+      setReportNotFound(false);
+      setIsDeleting(false);
+      
       fetchReportDetail();
       
       window.history.pushState({ modalOpen: true }, '');
@@ -103,6 +119,8 @@ export const ReportDetailModal = ({ reportId, open, onClose, onReportUpdated }: 
       setNewFiles([]);
       setRejectionReason("");
       setLoading(false);
+      setReportNotFound(false);
+      setIsDeleting(false);
     }
   }, [reportId, open, onClose]);
 
@@ -114,9 +132,22 @@ export const ReportDetailModal = ({ reportId, open, onClose, onReportUpdated }: 
         .from("daily_reports")
         .select("*")
         .eq("id", reportId)
-        .single();
+        .maybeSingle(); 
 
-      if (reportError) throw reportError;
+      if (reportError) {
+        if (reportError.code === 'PGRST116') {
+          setReportNotFound(true);
+          setLoading(false);
+          return;
+        }
+        throw reportError;
+      }
+
+      if (!reportData) {
+        setReportNotFound(true);
+        setLoading(false);
+        return;
+      }
 
       const { data: filesData, error: filesError } = await supabase
         .from("report_files")
@@ -130,7 +161,12 @@ export const ReportDetailModal = ({ reportId, open, onClose, onReportUpdated }: 
       setDescription((reportData && reportData.description) || "");
       setFiles(filesData || []);
     } catch (err: any) {
-      toast({ title: "Error", description: err?.message || "Failed to load report", variant: "destructive" });
+      console.error("Error fetching report:", err);
+      toast({ 
+        title: "Error", 
+        description: "Failed to load report details", 
+        variant: "destructive" 
+      });
       onClose();
     } finally {
       setLoading(false);
@@ -232,13 +268,10 @@ export const ReportDetailModal = ({ reportId, open, onClose, onReportUpdated }: 
       toast({ title: "Success", description: "Report updated" });
       setNewFiles([]);
       
-      // ✅ FIX: Close modal first, then trigger refresh
+      // FIX: Call update immediately for real-time list update
+      if (onReportUpdated) onReportUpdated(); 
       onClose();
       
-      // Small delay to ensure modal closes before refresh
-      setTimeout(() => {
-        if (onReportUpdated) onReportUpdated();
-      }, 100);
     } catch (err: any) {
       toast({ title: "Error", description: err?.message || "Failed to save", variant: "destructive" });
     } finally {
@@ -272,12 +305,10 @@ export const ReportDetailModal = ({ reportId, open, onClose, onReportUpdated }: 
 
       toast({ title: "Success", description: "Report approved" });
       
-      // ✅ FIX: Close modal first, then trigger refresh
+      // FIX: Call update immediately for real-time list update
+      if (onReportUpdated) onReportUpdated();
       onClose();
       
-      setTimeout(() => {
-        if (onReportUpdated) onReportUpdated();
-      }, 100);
     } catch (err: any) {
       toast({ title: "Error", description: err?.message || "Failed to approve", variant: "destructive" });
     } finally {
@@ -317,12 +348,10 @@ export const ReportDetailModal = ({ reportId, open, onClose, onReportUpdated }: 
       setShowRejectDialog(false);
       setRejectionReason("");
       
-      // ✅ FIX: Close modal first, then trigger refresh
+      // FIX: Call update immediately for real-time list update
+      if (onReportUpdated) onReportUpdated();
       onClose();
       
-      setTimeout(() => {
-        if (onReportUpdated) onReportUpdated();
-      }, 100);
     } catch (err: any) {
       toast({ title: "Error", description: err?.message || "Failed to reject", variant: "destructive" });
     } finally {
@@ -332,9 +361,11 @@ export const ReportDetailModal = ({ reportId, open, onClose, onReportUpdated }: 
 
   const handleDelete = async () => {
     if (!report) return;
-    if (!confirm("Are you sure you want to delete this report?")) return;
+    if (!confirm("Are you sure you want to delete this report? This action cannot be undone.")) return;
 
+    setIsDeleting(true);
     setActionLoading(true);
+    
     try {
       const { data: attachments, error: fetchErr } = await supabase
         .from("report_files")
@@ -372,16 +403,21 @@ export const ReportDetailModal = ({ reportId, open, onClose, onReportUpdated }: 
           variant: "default",
         });
       } else {
-        toast({ title: "Success", description: "Report and attachments deleted" });
+        toast({ title: "Success", description: "Report deleted successfully" });
       }
+
+      if (onReportDeleted) {
+        onReportDeleted(report.id);
+      }
+      
+      // FIX: Call update immediately for real-time list update
+      if (onReportUpdated) onReportUpdated(); 
 
       onClose();
       
-      setTimeout(() => {
-        if (onReportUpdated) onReportUpdated();
-      }, 100);
     } catch (err: any) {
       toast({ title: "Error", description: err?.message || "Failed to delete report", variant: "destructive" });
+      setIsDeleting(false);
     } finally {
       setActionLoading(false);
     }
@@ -392,12 +428,77 @@ export const ReportDetailModal = ({ reportId, open, onClose, onReportUpdated }: 
     report && (userRole === "admin" || (userRole === "staff" && report.user_id === user?.id && report.status === "pending"));
   const canApproveReject = userRole === "approver" || userRole === "admin";
 
+
+  if (reportNotFound) {
+    return (
+      <Sheet open={open} onOpenChange={onClose}>
+        <SheetContent 
+          side="right" 
+          className="w-full p-0 sm:max-w-xl [&>button]:hidden" 
+        >
+          <VisuallyHidden>
+            <SheetTitle>Report Not Found</SheetTitle>
+            <SheetDescription>This report no longer exists</SheetDescription>
+          </VisuallyHidden>
+
+          <div className="flex flex-col items-center justify-center h-screen p-6">
+            <div className="text-center space-y-4 max-w-md">
+              <div className="mx-auto bg-muted/50 p-4 rounded-full w-fit">
+                <AlertCircle className="h-12 w-12 text-muted-foreground" />
+              </div>
+              
+              <div className="space-y-2">
+                <h3 className="text-lg font-semibold">Report Not Found</h3>
+                <p className="text-sm text-muted-foreground">
+                  This report has been deleted or is no longer available.
+                </p>
+              </div>
+
+              <Button onClick={onClose} variant="outline" className="w-full">
+                <ArrowLeft className="h-4 w-4 mr-2" />
+                Back to Reports
+              </Button>
+            </div>
+          </div>
+        </SheetContent>
+      </Sheet>
+    );
+  }
+
+  if (isDeleting) {
+    return (
+      <Sheet open={open} onOpenChange={() => {}}>
+        <SheetContent 
+          side="right" 
+          className="w-full p-0 sm:max-w-xl [&>button]:hidden" 
+        >
+          <VisuallyHidden>
+            <SheetTitle>Deleting Report</SheetTitle>
+            <SheetDescription>Please wait while we delete this report</SheetDescription>
+          </VisuallyHidden>
+
+          <div className="flex flex-col items-center justify-center h-screen p-6">
+            <div className="text-center space-y-4">
+              <Loader2 className="h-12 w-12 animate-spin text-primary mx-auto" />
+              <div className="space-y-2">
+                <h3 className="text-lg font-semibold">Deleting Report...</h3>
+                <p className="text-sm text-muted-foreground">
+                  This may take a moment
+                </p>
+              </div>
+            </div>
+          </div>
+        </SheetContent>
+      </Sheet>
+    );
+  }
+
   return (
     <>
       <Sheet open={open} onOpenChange={onClose}>
         <SheetContent 
           side="right" 
-          className="w-full p-0 sm:max-w-full [&>button]:hidden"
+          className="w-full p-0 sm:max-w-xl [&>button]:hidden" 
         >
             <VisuallyHidden>
             <SheetTitle>Report Details</SheetTitle>
@@ -415,7 +516,7 @@ export const ReportDetailModal = ({ reportId, open, onClose, onReportUpdated }: 
           ) : (
             <div className="flex flex-col h-screen">
               {/* Fixed Header */}
-              <div className="flex-none border-b bg-background">
+              <div className="flex-none border-b bg-background z-10 shadow-sm">
                 <div className="px-4 py-3">
                   <div className="flex items-center gap-3 mb-3">
                     <Button
@@ -426,7 +527,7 @@ export const ReportDetailModal = ({ reportId, open, onClose, onReportUpdated }: 
                     >
                       <ArrowLeft className="h-5 w-5" />
                     </Button>
-                    <h2 className="text-lg font-semibold flex-1 truncate">Report Details</h2>
+                    <h2 className="text-lg font-bold flex-1 truncate">Report Details</h2>
                     
                     <div className="flex items-center gap-2 px-3 py-1.5 rounded-full bg-muted/50 border flex-shrink-0">
                       {report.status === "approved" ? (
@@ -472,9 +573,18 @@ export const ReportDetailModal = ({ reportId, open, onClose, onReportUpdated }: 
                         </Button>
                       )}
                       {canDelete && (
-                        <Button onClick={handleDelete} variant="outline" size="sm">
-                          <Trash2 className="h-4 w-4 mr-2" />
-                          Delete
+                        <Button onClick={handleDelete} variant="outline" size="sm" disabled={actionLoading}>
+                          {actionLoading ? (
+                            <>
+                              <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                              Deleting...
+                            </>
+                          ) : (
+                            <>
+                              <Trash2 className="h-4 w-4 mr-2" />
+                              Delete
+                            </>
+                          )}
                         </Button>
                       )}
                     </div>
@@ -482,29 +592,33 @@ export const ReportDetailModal = ({ reportId, open, onClose, onReportUpdated }: 
                 </div>
               </div>
 
-              {/* Scrollable Content */}
+              {/* Scrollable Content - FIX: pb-32 for mobile responsiveness */}
               <div className="flex-1 overflow-y-auto">
-                <div className="px-4 py-6 space-y-6 pb-20">
-                  {/* Description */}
+                <div className="px-4 py-6 space-y-6 pb-32"> {/* ✅ FIX: Increased padding bottom (pb-32) to prevent comment section from being cut off on mobile */}
+                  
+                  {/* Description - FOKUS UTAMA */}
                   <div className="space-y-3">
-                    <Label className="text-sm font-semibold">Description</Label>
+                    <Label className="text-sm font-semibold text-primary">Description</Label>
                     {canEdit ? (
                       <Textarea
                         value={description}
                         onChange={(e) => setDescription(e.target.value)}
                         rows={12}
-                        className="resize-none w-full"
+                        className="resize-none w-full border-2 focus-visible:ring-primary"
                         placeholder="Enter report description..."
                       />
                     ) : (
-                      <div className="text-sm leading-relaxed whitespace-pre-wrap bg-muted/30 p-4 rounded-lg break-words">
+                      <div className="text-sm leading-relaxed whitespace-pre-wrap bg-muted/50 border p-4 rounded-lg break-words shadow-inner">
                         {description || "No description provided"}
                       </div>
                     )}
 
                     {report.status === "rejected" && report.rejection_reason && (
-                      <div className="bg-destructive/10 border border-destructive/20 rounded-lg p-4">
-                        <Label className="text-destructive font-semibold text-sm">Rejection Reason</Label>
+                      <div className="bg-destructive/10 border border-destructive/30 rounded-lg p-4 mt-4"> 
+                        <Label className="text-destructive font-semibold text-sm flex items-center">
+                            <AlertCircle className="h-4 w-4 mr-2" />
+                            Rejection Reason
+                        </Label>
                         <p className="mt-2 text-sm text-destructive/90 break-words">{report.rejection_reason}</p>
                       </div>
                     )}
@@ -515,7 +629,8 @@ export const ReportDetailModal = ({ reportId, open, onClose, onReportUpdated }: 
                           variant="outline"
                           size="sm"
                           onClick={() =>
-                            window.open(`https://www.google.com/maps?q=${report.latitude},${report.longitude}`, "_blank")
+                            // FIX: Corrected Google Maps URL
+                            window.open(`https://www.google.com/maps/search/?api=1&query=${report.latitude},${report.longitude}`, "_blank")
                           }
                         >
                           <MapPin className="h-4 w-4 mr-2" />
@@ -525,13 +640,15 @@ export const ReportDetailModal = ({ reportId, open, onClose, onReportUpdated }: 
                     )}
                   </div>
 
+                  <Separator className="my-6" /> 
+
                   {/* Attachments */}
                   <div className="space-y-3">
-                    <Label className="text-sm font-semibold">Attachments ({files.length})</Label>
+                    <Label className="text-sm font-semibold text-primary">Attachments ({files.length + newFiles.length})</Label>
                     
-                    {files.length > 0 && (
+                    {(files.length > 0 || newFiles.length > 0) ? (
                       <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-3">
-                        {files.map((file) => {
+                        {files.map((file, index) => {
                           const isImage = file.file_type?.startsWith("image/");
                           const isVideo = file.file_type?.startsWith("video/");
                           const isPdf = file.file_type === "application/pdf";
@@ -539,8 +656,7 @@ export const ReportDetailModal = ({ reportId, open, onClose, onReportUpdated }: 
                           const isExcel = file.file_type?.includes("sheet") || file.file_type?.includes("excel");
 
                           const handleFileClick = () => {
-                            const fileIndex = files.findIndex((f) => f.id === file.id);
-                            setPreviewInitialIndex(fileIndex);
+                            setPreviewInitialIndex(index);
                             setPreviewOpen(true);
                           };
 
@@ -577,12 +693,22 @@ export const ReportDetailModal = ({ reportId, open, onClose, onReportUpdated }: 
                             </div>
                           );
                         })}
+                        
+                        {/* New files preview (read-only in modal) */}
+                        {newFiles.map((file, index) => (
+                            <div key={`new-${index}`} className="relative group bg-card border-2 border-dashed p-3 rounded-lg flex flex-col items-center justify-center text-center">
+                                <span className="text-xs text-muted-foreground line-clamp-2">{file.name}</span>
+                                <div className="absolute top-1 right-1">
+                                    <Button size="icon" variant="destructive" onClick={() => removeNewFile(index)} className="h-6 w-6 p-0 opacity-70 hover:opacity-100 transition-opacity">
+                                        <X className="h-3 w-3" />
+                                    </Button>
+                                </div>
+                            </div>
+                        ))}
                       </div>
-                    )}
-
-                    {files.length === 0 && !canEdit && (
-                      <p className="text-sm text-muted-foreground text-center py-8 bg-muted/30 rounded-lg">No attachments</p>
-                    )}
+                    ) : !canEdit ? (
+                      <p className="text-sm text-muted-foreground text-center py-8 bg-muted/30 rounded-lg border border-dashed">No attachments</p>
+                    ) : null}
 
                     {canEdit && (
                       <div className="pt-2 space-y-3">
@@ -595,22 +721,11 @@ export const ReportDetailModal = ({ reportId, open, onClose, onReportUpdated }: 
                             </span>
                           </Button>
                         </label>
-                        
-                        {newFiles.length > 0 && (
-                          <div className="space-y-2">
-                            {newFiles.map((file, index) => (
-                              <div key={index} className="flex items-center justify-between bg-muted/50 p-2 rounded-md">
-                                <span className="text-xs truncate flex-1">{file.name}</span>
-                                <Button size="sm" variant="ghost" onClick={() => removeNewFile(index)} className="h-7 w-7 p-0">
-                                  <X className="h-3 w-3" />
-                                </Button>
-                              </div>
-                            ))}
-                          </div>
-                        )}
                       </div>
                     )}
                   </div>
+
+                  <Separator className="my-6" /> 
 
                   {/* Comments */}
                   <ReportComments reportId={report.id} />

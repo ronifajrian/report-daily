@@ -511,6 +511,34 @@ export const InfiniteReportsList = ({
     fetchReports(1, true);
   }, [fetchReports]);
 
+  // ✅ NEW: Immediate delete handler (no refetch needed)
+  const handleReportDeleted = useCallback((deletedReportId: string) => {
+    // ✅ Immediately remove from state
+    setReports(prev => {
+      const filtered = prev.filter(r => r.id !== deletedReportId);
+      
+      // Update refs
+      reportsRef.current = filtered;
+      
+      // Clear from cache
+      fetchCache.clear();
+      
+      return filtered;
+    });
+
+    // ✅ Also remove from new reports buffer if it's there
+    newReportsBufferRef.current = newReportsBufferRef.current.filter(
+      r => r.id !== deletedReportId
+    );
+    setNewCount(newReportsBufferRef.current.length);
+
+    // ✅ Show success toast
+    toast({
+      title: "Report Deleted",
+      description: "The report has been removed from your list",
+    });
+  }, [toast]);
+
   const renderFilterContent = () => (
     <div className="space-y-4 py-4">
       <div className="space-y-2">
@@ -729,6 +757,7 @@ export const InfiniteReportsList = ({
         open={detailModalOpen}
         onClose={handleCloseDetailModal}
         onReportUpdated={handleReportUpdated}
+        onReportDeleted={handleReportDeleted}
       />
     </>
   );
