@@ -488,17 +488,7 @@ export const ReportDetailModal = ({
                 <div className="flex-none p-4 bg-background border-t shadow-[0_-4px_10px_rgba(0,0,0,0.03)] z-30 sticky bottom-0 w-full safe-area-pb">
                     <div className="flex items-center gap-3 max-w-md mx-auto w-full">
                         
-                        {canDelete && (
-                            <Button 
-                                variant="outline" 
-                                size="icon"
-                                onClick={handleDelete} 
-                                disabled={actionLoading}
-                                className="flex-shrink-0 h-11 w-11 border-destructive/30 text-destructive hover:bg-destructive/10 hover:text-destructive hover:border-destructive rounded-xl"
-                            >
-                                {actionLoading ? <Loader2 className="h-5 w-5 animate-spin" /> : <Trash2 className="h-5 w-5" />}
-                            </Button>
-                        )}
+                        
 
                         {canEdit && (
                             <Button 
@@ -511,6 +501,18 @@ export const ReportDetailModal = ({
                                 ) : (
                                     <> <Save className="h-5 w-5 mr-2" /> Save Changes </>
                                 )}
+                            </Button>
+                        )}
+
+                        {canDelete && (
+                            <Button 
+                                variant="outline" 
+                                size="icon"
+                                onClick={handleDelete} 
+                                disabled={actionLoading}
+                                className="flex-shrink-0 h-11 w-11 border-destructive/30 text-destructive hover:bg-destructive/10 hover:text-destructive hover:border-destructive rounded-xl"
+                            >
+                                {actionLoading ? <Loader2 className="h-5 w-5 animate-spin" /> : <Trash2 className="h-5 w-5" />}
                             </Button>
                         )}
 
