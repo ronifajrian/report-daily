@@ -1,7 +1,6 @@
-// src/components/AttachmentCarouselPreview.tsx
-import { useState, useEffect } from 'react';
+// src/components/dashboard/AttachmentCarouselPreview.tsx
+import { useState, useEffect, useRef } from 'react';
 import { Dialog, DialogContent, DialogTitle, DialogDescription } from '@/components/ui/dialog';
-import { VisuallyHidden } from '@radix-ui/react-visually-hidden';
 import { Button } from '@/components/ui/button';
 import {
   Carousel,
@@ -17,12 +16,13 @@ import {
   FileSpreadsheet,
   File as FileIcon,
   X,
+  Loader2,
 } from 'lucide-react';
-import { Skeleton } from '@/components/ui/skeleton';
 import { useToast } from '@/hooks/use-toast';
-import { TransformWrapper, TransformComponent } from 'react-zoom-pan-pinch';
+import { TransformWrapper, TransformComponent, ReactZoomPanPinchContentRef } from 'react-zoom-pan-pinch';
 import { fileServeUrl } from '@/lib/storage';
 import { fetchProtectedAsObjectUrl } from '@/lib/protectedFetch';
+import { cn } from '@/lib/utils';
 
 interface ReportFile {
   id: string;
@@ -49,39 +49,40 @@ export const AttachmentCarouselPreview = ({
   const [currentIndex, setCurrentIndex] = useState(initialIndex);
   const [fileUrls, setFileUrls] = useState<Record<string, string>>({});
   const [loadingStates, setLoadingStates] = useState<Record<string, boolean>>({});
+  
+  const transformRef = useRef<ReactZoomPanPinchContentRef>(null);
+  const [isZoomed, setIsZoomed] = useState(false);
   const { toast } = useToast();
 
   useEffect(() => {
+    if (open) {
+      setCurrentIndex(initialIndex);
+      setIsZoomed(false);
+    }
+  }, [open, initialIndex]);
+
+  useEffect(() => {
     if (!api) return;
+    api.scrollTo(initialIndex, true);
 
-    // scroll ke index awal
-    api.scrollTo(initialIndex);
-    setCurrentIndex(initialIndex);
-
-    // handler yang akan di-unsubscribe nanti
-    const handler = () => {
-      try {
-        setCurrentIndex(api.selectedScrollSnap());
-      } catch {
-        // guard jika api berubah/invalid saat handler dipanggil
+    const onSelect = () => {
+      setCurrentIndex(api.selectedScrollSnap());
+      setIsZoomed(false);
+      if (transformRef.current) {
+        transformRef.current.resetTransform();
       }
     };
 
-    // register
-    api.on('select', handler);
-
-    // cleanup harus mengembalikan fungsi yang tidak mengembalikan value (void)
+    api.on('select', onSelect);
     return () => {
-      // safe-check bila api.off tidak tersedia
-      try {
-        // kalau library menyediakan `off`
-        (api as any).off?.('select', handler);
-        // atau kalau `on` mengembalikan unsubscribe, panggil itu instead.
-      } catch {
-        // ignore
-      }
+      api.off('select', onSelect);
     };
   }, [api, initialIndex]);
+
+  useEffect(() => {
+    if (!api) return;
+    api.reInit({ watchDrag: !isZoomed });
+  }, [api, isZoomed]);
 
   useEffect(() => {
     if (open && files[currentIndex]) {
@@ -107,16 +108,11 @@ export const AttachmentCarouselPreview = ({
         return;
       }
       const workerUrl = fileServeUrl(file.storage_path);
-      if (!workerUrl) throw new Error('No storage path for file');
+      if (!workerUrl) throw new Error('No storage path');
       const objUrl = await fetchProtectedAsObjectUrl(workerUrl);
       setFileUrls((p) => ({ ...p, [file.id]: objUrl }));
     } catch (err: any) {
       console.error(err);
-      toast({
-        title: 'Error',
-        description: err?.message || 'Failed to load file',
-        variant: 'destructive',
-      });
     } finally {
       setLoadingStates((p) => ({ ...p, [file.id]: false }));
     }
@@ -125,27 +121,16 @@ export const AttachmentCarouselPreview = ({
   const handleDownload = async (file: ReportFile) => {
     try {
       const url = fileUrls[file.id] ?? file.file_url;
-      if (!url) {
-        toast({
-          title: 'Error',
-          description: 'No URL available',
-          variant: 'destructive',
-        });
-        return;
-      }
+      if (!url) throw new Error("URL not ready");
+      
       const link = document.createElement('a');
       link.href = url;
       link.download = file.file_name;
       document.body.appendChild(link);
       link.click();
       document.body.removeChild(link);
-      toast({ title: 'Success', description: 'File downloaded' });
     } catch (err: any) {
-      toast({
-        title: 'Error',
-        description: err?.message || 'Download failed',
-        variant: 'destructive',
-      });
+      toast({ title: 'Error', description: 'Download failed', variant: 'destructive' });
     }
   };
 
@@ -155,91 +140,92 @@ export const AttachmentCarouselPreview = ({
     const isImage = file.file_type?.startsWith('image/');
     const isVideo = file.file_type?.startsWith('video/');
     const isPdf = file.file_type === 'application/pdf';
-    const isDoc =
-      file.file_type?.includes('word') || file.file_type?.includes('document');
-    const isExcel =
-      file.file_type?.includes('sheet') || file.file_type?.includes('excel');
+    const isDoc = file.file_type?.includes('word') || file.file_type?.includes('document');
+    const isExcel = file.file_type?.includes('sheet') || file.file_type?.includes('excel');
 
     if (isLoading) {
       return (
-        <div className="w-full h-full flex items-center justify-center">
-          <div className="text-center space-y-4">
-            <Skeleton className="h-64 w-64 mx-auto rounded-lg" />
-            <p className="text-sm text-white/60 animate-pulse">
-              Loading preview...
-            </p>
-          </div>
+        <div className="w-full h-full flex flex-col items-center justify-center text-white/70 gap-3">
+            <Loader2 className="h-10 w-10 animate-spin" />
+            <p className="text-xs font-medium">Loading...</p>
         </div>
       );
     }
 
     if (isImage && url) {
       return (
-        <TransformWrapper initialScale={1} minScale={1} maxScale={4} centerOnInit>
-          <TransformComponent
-            wrapperClass="!w-full !h-full"
-            contentClass="!w-full !h-full flex items-center justify-center"
-          >
-            <img
-              src={url}
-              alt={file.file_name}
-              className="w-full h-full object-contain"
-              style={{
-                maxWidth: '100vw',
-                maxHeight: 'calc(100vh - 5rem)',
-              }}
-            />
-          </TransformComponent>
-        </TransformWrapper>
+        // [FIX UTAMA] Gunakan w-full h-full pada container utama gambar
+        <div className="w-full h-full overflow-hidden bg-black">
+            <TransformWrapper
+                ref={transformRef}
+                initialScale={1}
+                minScale={1}
+                maxScale={5}
+                centerOnInit={true}
+                panning={{ disabled: !isZoomed }} 
+                doubleClick={{ mode: "reset" }}
+                onTransformed={(e) => {
+                    const zoomed = e.state.scale > 1.01;
+                    if (zoomed !== isZoomed) setIsZoomed(zoomed);
+                }}
+            >
+                {({ zoomIn, zoomOut, resetTransform }) => (
+                <TransformComponent
+                    // [FIX 1] Paksa wrapper dan content memenuhi 100% layar
+                    wrapperStyle={{
+                        width: "100%",
+                        height: "100%",
+                    }}
+                    contentStyle={{
+                        width: "100%",
+                        height: "100%",
+                    }}
+                >
+                    {/* [FIX 2] Gunakan object-contain pada img yang ukurannya 100%. 
+                        Ini menyerahkan centering ke CSS browser, bukan layout div */}
+                    <img
+                        src={url}
+                        alt={file.file_name}
+                        className="w-full h-full object-contain transition-opacity duration-200"
+                    />
+                </TransformComponent>
+                )}
+            </TransformWrapper>
+        </div>
       );
     }
 
     if (isVideo && url) {
       return (
-        <video
-          src={url}
-          controls
-          className="w-full h-full object-contain"
-          style={{
-            maxWidth: '100vw',
-            maxHeight: 'calc(100vh - 5rem)',
-          }}
-        />
+        <div className="w-full h-full flex items-center justify-center bg-black">
+            <video
+                src={url}
+                controls
+                playsInline
+                className="max-h-screen max-w-full w-full object-contain"
+            />
+        </div>
       );
     }
 
     const getFileIcon = () => {
-      if (isPdf) return <FileText className="h-24 w-24 text-red-500" />;
-      if (isDoc) return <FileText className="h-24 w-24 text-blue-500" />;
-      if (isExcel) return <FileSpreadsheet className="h-24 w-24 text-green-500" />;
-      return <FileIcon className="h-24 w-24 text-white/60" />;
-    };
-
-    const getBgColor = () => {
-      if (isPdf) return 'bg-red-500/10';
-      if (isDoc) return 'bg-blue-500/10';
-      if (isExcel) return 'bg-green-500/10';
-      return 'bg-white/5';
-    };
-
-    const getFileTypeName = () => {
-      if (isPdf) return 'PDF Document';
-      if (isDoc) return 'Word Document';
-      if (isExcel) return 'Excel Spreadsheet';
-      return 'Document';
+      if (isPdf) return <FileText className="h-20 w-20 text-red-500 mb-4" />;
+      if (isDoc) return <FileText className="h-20 w-20 text-blue-500 mb-4" />;
+      if (isExcel) return <FileSpreadsheet className="h-20 w-20 text-green-500 mb-4" />;
+      return <FileIcon className="h-20 w-20 text-white/60 mb-4" />;
     };
 
     return (
-      <div className={`${getBgColor()} rounded-2xl p-8 text-center space-y-5 max-w-md`}>
-        <div className="flex justify-center">{getFileIcon()}</div>
-        <div className="space-y-2">
-          <h3 className="font-semibold text-lg text-white">{getFileTypeName()}</h3>
-          <p className="text-sm text-white/60 break-all">{file.file_name}</p>
+      <div className="w-full h-full flex items-center justify-center p-6">
+        <div className="bg-white/10 backdrop-blur-sm rounded-2xl p-8 text-center max-w-xs w-full border border-white/10">
+            <div className="flex justify-center">{getFileIcon()}</div>
+            <h3 className="font-semibold text-white text-base line-clamp-2 mb-2">{file.file_name}</h3>
+            <p className="text-white/60 text-xs mb-6">Preview not available</p>
+            <Button onClick={() => handleDownload(file)} variant="secondary" className="w-full font-medium">
+            <Download className="h-4 w-4 mr-2" />
+            Download
+            </Button>
         </div>
-        <Button onClick={() => handleDownload(file)} className="mt-4" size="sm">
-          <Download className="h-4 w-4 mr-2" />
-          Download to View
-        </Button>
       </div>
     );
   };
@@ -251,64 +237,76 @@ export const AttachmentCarouselPreview = ({
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent
         aria-describedby="attachment-preview-desc"
-        className="max-w-full w-screen h-screen p-0 bg-black/95 border-none [&>button]:hidden"
+        className="max-w-full w-screen h-screen p-0 bg-black border-none [&>button]:hidden duration-0 focus:outline-none"
       >
-        {/* Make Title/Description direct children (sr-only) so Radix runtime will detect them reliably */}
-        <DialogTitle id="attachment-preview-title" className="sr-only">
-          Attachment preview
-        </DialogTitle>
+        <DialogTitle className="sr-only">Preview</DialogTitle>
         <DialogDescription id="attachment-preview-desc" className="sr-only">
-          Preview lampiran dalam tampilan layar penuh. Tekan Escape untuk menutup.
+          Full screen attachment preview
         </DialogDescription>
 
-        <div className="relative h-full flex flex-col w-full">
-          <div className="absolute top-0 left-0 right-0 z-20 flex items-center justify-between p-4 bg-gradient-to-b from-black/80 to-transparent">
-            <div className="flex-1 min-w-0 mr-4">
-              <h3 className="text-sm sm:text-base font-medium text-white truncate">
-                {currentFile?.file_name}
-              </h3>
-              <p className="text-xs text-white/60">
+        <div className="relative w-full h-full flex flex-col overflow-hidden bg-black">
+          
+          {/* Header Overlay */}
+          <div className={cn(
+            "absolute top-0 left-0 right-0 z-50 p-4 flex items-start justify-between bg-gradient-to-b from-black/80 via-black/40 to-transparent transition-all duration-300 pointer-events-none",
+            isZoomed ? "opacity-0 -translate-y-full" : "opacity-100 translate-y-0"
+          )}>
+            <div className="flex-1 min-w-0 mr-4 pt-1 pointer-events-auto">
+               <div className="text-white/90 text-sm font-bold drop-shadow-md tracking-wide">
                 {currentIndex + 1} / {files.length}
-              </p>
+               </div>
+               <p className="text-white/70 text-xs truncate mt-0.5 max-w-[200px] drop-shadow-sm">
+                 {currentFile?.file_name}
+               </p>
             </div>
-            <div className="flex items-center gap-2 shrink-0">
+
+            <div className="flex items-center gap-3 pointer-events-auto">
               <Button
-                size="sm"
+                size="icon"
                 variant="ghost"
                 onClick={() => currentFile && handleDownload(currentFile)}
-                className="h-9 w-9 sm:w-auto sm:px-3 p-0 sm:p-2 text-white hover:bg-white/10"
+                className="h-10 w-10 rounded-full bg-black/30 text-white hover:bg-black/50 backdrop-blur-md border border-white/10"
               >
-                <Download className="h-4 w-4" />
-                <span className="hidden sm:inline ml-2">Download</span>
+                <Download className="h-5 w-5" />
               </Button>
               <Button
-                size="sm"
+                size="icon"
                 variant="ghost"
                 onClick={() => onOpenChange(false)}
-                className="h-9 w-9 p-0 text-white hover:bg-white/10"
+                className="h-10 w-10 rounded-full bg-black/30 text-white hover:bg-black/50 backdrop-blur-md border border-white/10"
               >
                 <X className="h-5 w-5" />
               </Button>
             </div>
           </div>
 
-          <div className="absolute inset-0 w-full h-full pt-16 flex items-center justify-center">
-            <Carousel setApi={setApi} className="h-full w-full">
-              <CarouselContent className="h-full">
+          {/* Carousel Area */}
+          <div className="flex-1 w-full h-full relative">
+            <Carousel 
+                setApi={setApi} 
+                className="w-full h-full"
+                opts={{
+                    loop: false,
+                    duration: 20,
+                }}
+            >
+              <CarouselContent className="h-full ml-0"> 
                 {files.map((file) => (
                   <CarouselItem
                     key={file.id}
-                    className="h-full basis-full flex items-center justify-center"
+                    // [PENTING] Carousel Item juga harus w-full h-full
+                    className="h-full pl-0 basis-full relative" 
                   >
                     {renderFilePreview(file)}
                   </CarouselItem>
                 ))}
               </CarouselContent>
-              {files.length > 1 && (
-                <>
-                  <CarouselPrevious className="left-2 sm:left-4 h-10 w-10 bg-black/50 border-white/20 text-white hover:bg-black/70 hover:text-white" />
-                  <CarouselNext className="right-2 sm:right-4 h-10 w-10 bg-black/50 border-white/20 text-white hover:bg-black/70 hover:text-white" />
-                </>
+              
+              {!isZoomed && files.length > 1 && (
+                  <>
+                    <CarouselPrevious className="hidden sm:flex left-4 h-12 w-12 bg-white/10 border-white/5 text-white hover:bg-white/20 backdrop-blur-sm" />
+                    <CarouselNext className="hidden sm:flex right-4 h-12 w-12 bg-white/10 border-white/5 text-white hover:bg-white/20 backdrop-blur-sm" />
+                  </>
               )}
             </Carousel>
           </div>
