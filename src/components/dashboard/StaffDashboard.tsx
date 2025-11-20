@@ -28,7 +28,7 @@ const StaffDashboard = () => {
       <div className="max-w-2xl mx-auto px-0 sm:px-4 py-4">
         <InfiniteReportsList 
           userId={user?.id}
-          showAuthor={false}
+          showAuthor={true}
           userRole="staff"
         />
       </div>

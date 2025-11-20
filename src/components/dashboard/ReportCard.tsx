@@ -2,7 +2,6 @@
 
 import { Card, CardContent } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
-import { format } from 'date-fns';
 import { Report } from './StaffDashboard';
 import { MapPin } from 'lucide-react';
 import { useState, useEffect, useRef, useCallback } from 'react';
@@ -10,6 +9,8 @@ import { supabase } from '@/integrations/supabase/client';
 import { ScrollArea, ScrollBar } from '@/components/ui/scroll-area';
 import { AttachmentPreview } from './AttachmentPreview';
 import { AttachmentCarouselPreview } from './AttachmentCarouselPreview';
+import { Avatar, AvatarFallback } from '@/components/ui/avatar';
+import { formatRelativeTime, getInitials } from '@/lib/utils'; // [CHANGE]
 
 interface ReportFile {
   id: string;
@@ -150,7 +151,7 @@ export const ReportCard = ({ report, onClick, showAuthor = false, isNew = false 
     setPreviewOpen(true);
   }, []);
 
-  return (
+return (
     <>
       <Card 
         ref={cardRef}
@@ -161,28 +162,51 @@ export const ReportCard = ({ report, onClick, showAuthor = false, isNew = false 
       >
         <CardContent className="p-4 space-y-3">
           <div className="flex items-start justify-between gap-2">
-            <div className="flex-1 min-w-0">
+            
+            {/* START: Timeline Header Style (Instagram-like) */}
+            <div className="flex flex-1 min-w-0 items-start gap-3"> {/* Kontainer untuk Avatar + Info */}
+              
+              {/* Profile Icon/Avatar (Inisial) */}
               {showAuthor && report.profiles && (
-                <p className="font-semibold text-sm mb-1 truncate">
-                  {report.profiles.full_name}
-                </p>
+                <Avatar className="h-9 w-9 flex-shrink-0">
+                  <AvatarFallback className='text-sm bg-secondary text-secondary-foreground'>
+                    {getInitials(report.profiles.full_name || 'N/A')}
+                  </AvatarFallback>
+                </Avatar>
               )}
-              <p className="text-xs text-muted-foreground flex items-center gap-1 flex-wrap">
-                <span className="whitespace-nowrap">
-                  {format(new Date(report.created_at), 'MMM dd, yyyy • HH:mm')}
-                </span>
-                {report.latitude && report.longitude && (
-                  <>
-                    <span className="mx-1">•</span>
-                    <MapPin 
-                      className="h-3 w-3 text-primary cursor-pointer hover:text-primary/80 flex-shrink-0"
-                      onClick={(e) => openGoogleMaps(e, report.latitude!, report.longitude!)}
-                    />
-                  </>
+
+              <div className="flex-1 min-w-0 pt-0.5"> {/* Kontainer untuk Nama dan Info Baris Kedua */}
+                {/* Nama Pelapor */}
+                {showAuthor && report.profiles && (
+                  <p className="font-semibold text-sm truncate leading-none">
+                    {report.profiles.full_name}
+                  </p>
                 )}
-              </p>
+
+                {/* Waktu dan Lokasi (di bawah nama) */}
+                <p className="text-xs text-muted-foreground flex items-center gap-1 flex-wrap mt-1">
+                  {/* Waktu */}
+                  <span className="whitespace-nowrap">
+                    {formatRelativeTime(report.created_at)} 
+                  </span>
+                  
+                  {/* Ikon Lokasi */}
+                  {report.latitude && report.longitude && (
+                    <>
+                      <span className="mx-1">•</span>
+                      <MapPin 
+                        className="h-3 w-3 text-primary cursor-pointer hover:text-primary/80 flex-shrink-0"
+                        onClick={(e) => openGoogleMaps(e, report.latitude!, report.longitude!)}
+                      />
+                    </>
+                  )}
+                </p>
+              </div>
             </div>
-            <div className="flex-shrink-0">
+            {/* END: Timeline Header Style */}
+            
+            {/* Badge Status (Tetap di kanan) */}
+            <div className="flex-shrink-0 pt-1">
               {getStatusBadge(report.status)}
             </div>
           </div>
