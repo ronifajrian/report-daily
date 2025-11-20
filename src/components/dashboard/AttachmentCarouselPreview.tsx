@@ -52,8 +52,38 @@ export const AttachmentCarouselPreview = ({
   
   const transformRef = useRef<ReactZoomPanPinchContentRef>(null);
   const [isZoomed, setIsZoomed] = useState(false);
+  
+  // Ref untuk melacak apakah penutupan dipicu oleh tombol Back browser
+  const closedByBackRef = useRef(false);
+
   const { toast } = useToast();
 
+  // --- HISTORY & BACK BUTTON HANDLER ---
+  useEffect(() => {
+    if (open) {
+      // Reset flag setiap kali modal dibuka
+      closedByBackRef.current = false;
+      
+      // Tambahkan state baru ke history browser
+      window.history.pushState({ previewOpen: true }, "", window.location.href);
+
+      const handlePopState = () => {
+        closedByBackRef.current = true;
+        onOpenChange(false);
+      };
+
+      window.addEventListener("popstate", handlePopState);
+
+      return () => {
+        window.removeEventListener("popstate", handlePopState);
+        if (!closedByBackRef.current) {
+            window.history.back();
+        }
+      };
+    }
+  }, [open, onOpenChange]);
+
+  // --- RESET STATE SAAT BUKA ---
   useEffect(() => {
     if (open) {
       setCurrentIndex(initialIndex);
@@ -61,6 +91,7 @@ export const AttachmentCarouselPreview = ({
     }
   }, [open, initialIndex]);
 
+  // --- CAROUSEL SYNC ---
   useEffect(() => {
     if (!api) return;
     api.scrollTo(initialIndex, true);
@@ -79,11 +110,13 @@ export const AttachmentCarouselPreview = ({
     };
   }, [api, initialIndex]);
 
+  // --- GESTURE HANDLING ---
   useEffect(() => {
     if (!api) return;
     api.reInit({ watchDrag: !isZoomed });
   }, [api, isZoomed]);
 
+  // --- LOAD FILE URL ---
   useEffect(() => {
     if (open && files[currentIndex]) {
       loadFileUrl(files[currentIndex]);
@@ -154,7 +187,6 @@ export const AttachmentCarouselPreview = ({
 
     if (isImage && url) {
       return (
-        // [FIX UTAMA] Gunakan w-full h-full pada container utama gambar
         <div className="w-full h-full overflow-hidden bg-black">
             <TransformWrapper
                 ref={transformRef}
@@ -171,23 +203,30 @@ export const AttachmentCarouselPreview = ({
             >
                 {({ zoomIn, zoomOut, resetTransform }) => (
                 <TransformComponent
-                    // [FIX 1] Paksa wrapper dan content memenuhi 100% layar
                     wrapperStyle={{
                         width: "100%",
                         height: "100%",
+                        display: "flex",
+                        alignItems: "center",
+                        justifyContent: "center",
+                        minHeight: "100%",
                     }}
                     contentStyle={{
                         width: "100%",
                         height: "100%",
+                        display: "flex",
+                        alignItems: "center",
+                        justifyContent: "center",
+                        minHeight: "100%",
                     }}
                 >
-                    {/* [FIX 2] Gunakan object-contain pada img yang ukurannya 100%. 
-                        Ini menyerahkan centering ke CSS browser, bukan layout div */}
-                    <img
-                        src={url}
-                        alt={file.file_name}
-                        className="w-full h-full object-contain transition-opacity duration-200"
-                    />
+                    <div className="w-full h-full flex items-center justify-center">
+                      <img
+                          src={url}
+                          alt={file.file_name}
+                          className="max-w-full max-h-full object-contain block transition-opacity duration-200"
+                      />
+                    </div>
                 </TransformComponent>
                 )}
             </TransformWrapper>
@@ -237,14 +276,14 @@ export const AttachmentCarouselPreview = ({
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent
         aria-describedby="attachment-preview-desc"
-        className="max-w-full w-screen h-screen p-0 bg-black border-none [&>button]:hidden duration-0 focus:outline-none"
+        className="max-w-full w-screen h-[100dvh] p-0 bg-black border-none [&>button]:hidden duration-0 focus:outline-none"
       >
         <DialogTitle className="sr-only">Preview</DialogTitle>
         <DialogDescription id="attachment-preview-desc" className="sr-only">
           Full screen attachment preview
         </DialogDescription>
 
-        <div className="relative w-full h-full flex flex-col overflow-hidden bg-black">
+        <div className="relative w-full h-full min-h-[100dvh] flex flex-col overflow-hidden bg-black">
           
           {/* Header Overlay */}
           <div className={cn(
@@ -294,7 +333,6 @@ export const AttachmentCarouselPreview = ({
                 {files.map((file) => (
                   <CarouselItem
                     key={file.id}
-                    // [PENTING] Carousel Item juga harus w-full h-full
                     className="h-full pl-0 basis-full relative" 
                   >
                     {renderFilePreview(file)}
