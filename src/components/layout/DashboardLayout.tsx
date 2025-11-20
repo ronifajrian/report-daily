@@ -9,9 +9,10 @@ import { Loader2 } from 'lucide-react';
 interface DashboardLayoutProps {
   children: React.ReactNode;
   onReportCreated?: () => void;
+  onHomeClick: () => void;
 }
 
-export const DashboardLayout = ({ children, onReportCreated }: DashboardLayoutProps) => {
+export const DashboardLayout = ({ children, onReportCreated, onHomeClick }: DashboardLayoutProps) => {
   const { userRole, loading } = useAuth();
   const [showCreateModal, setShowCreateModal] = useState(false);
 
@@ -38,6 +39,7 @@ export const DashboardLayout = ({ children, onReportCreated }: DashboardLayoutPr
         <DashboardSidebar 
           userRole={userRole as 'staff' | 'approver' | 'admin'} 
           onCreateReport={handleCreateReport}
+          onHomeClick={onHomeClick} // ✅ TERUSKAN prop onHomeClick
         />
         
         <main className="flex-1 pb-20 md:pb-0 overflow-y-auto">
@@ -47,6 +49,7 @@ export const DashboardLayout = ({ children, onReportCreated }: DashboardLayoutPr
         <MobileBottomNav 
           userRole={userRole as 'staff' | 'approver' | 'admin'}
           onCreateReport={handleCreateReport}
+          onHomeClick={onHomeClick} // ✅ TERUSKAN prop onHomeClick
         />
       </div>
 

@@ -217,7 +217,7 @@ export function revokeAllCachedObjectUrls() {
 // ✅ Periodic cleanup (run every 5 minutes)
 if (typeof window !== 'undefined') {
   setInterval(() => {
-    console.log(`[CACHE] Current size: ${cache.size()}`);
+    // console.log(`[CACHE] Current size: ${cache.size()}`);
   }, 5 * 60 * 1000);
 }
 

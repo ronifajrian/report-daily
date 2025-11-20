@@ -1,10 +1,10 @@
 // /src/App.tsx
-import React, { Suspense, lazy } from "react";
+import React, { Suspense, lazy, useEffect, useCallback, useRef } from "react"; // ✅ Tambahkan import hooks
 import { Toaster } from "@/components/ui/toaster";
 import { Toaster as Sonner } from "@/components/ui/sonner";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { BrowserRouter, Routes, Route } from "react-router-dom";
+import { BrowserRouter, Routes, Route, useLocation, useNavigate } from "react-router-dom"; // ✅ Tambahkan useLocation, useNavigate
 import { AuthProvider } from "@/hooks/useAuth";
 import ProtectedRoute from "@/components/ProtectedRoute";
 import MaintenanceCheck from "@/components/MaintenanceCheck";
@@ -42,6 +42,64 @@ const LoadingFallback = () => (
   </div>
 );
 
+// ✅ NEW: Interface untuk prop yang akan diterima oleh komponen turunan (Dashboard, Profile, dll)
+interface DashboardContentProps {
+  onRefreshTriggerRegistration: (refreshFn: () => void) => void;
+}
+
+// ✅ NEW: Wrapper Component untuk menghubungkan Layout dan Content
+const DashboardRouteWrapper = ({ children }: { children: React.ReactNode }) => {
+  const navigate = useNavigate();
+  const location = useLocation();
+  
+  const refreshReportsRef = useRef<(() => void) | null>(null);
+
+  const registerRefreshFunction = useCallback((refreshFn: () => void) => {
+    refreshReportsRef.current = refreshFn;
+  }, []);
+
+  const handleHomeClick = useCallback(() => {
+    if (location.pathname === '/dashboard') {
+      if (refreshReportsRef.current) {
+        refreshReportsRef.current();
+      } else {
+        window.scrollTo({ top: 0, behavior: 'smooth' });
+      }
+    } else {
+      navigate('/dashboard');
+    }
+  }, [location.pathname, navigate]);
+
+  let contentWithProps = null;
+  
+  // ✅ FIX OPTIMAL: Menggunakan React.Children untuk mencari elemen valid
+  // Ini akan mengabaikan 'null', 'undefined', string kosong, atau komentar yang mungkin terselip
+  const validChild = React.Children.toArray(children).find((child) => 
+    React.isValidElement(child)
+  ) as React.ReactElement<DashboardContentProps> | undefined;
+
+  if (validChild) {
+    // Kloning elemen anak yang valid dan suntikkan prop
+    contentWithProps = React.cloneElement(validChild, {
+      onRefreshTriggerRegistration: registerRefreshFunction,
+    });
+  } else {
+    console.error("DashboardRouteWrapper: No valid child element found.");
+    // Fallback agar aplikasi tidak crash total
+    contentWithProps = <div className="p-4 text-red-500">Error: Komponen halaman tidak valid.</div>;
+  }
+
+  return (
+    <ProtectedRoute>
+      <MaintenanceCheck>
+        <DashboardLayout onHomeClick={handleHomeClick}>
+          {contentWithProps}
+        </DashboardLayout>
+      </MaintenanceCheck>
+    </ProtectedRoute>
+  );
+};
+
 const App = () => (
   <QueryClientProvider client={queryClient}>
     <TooltipProvider>
@@ -73,55 +131,31 @@ const App = () => (
                   }
                 />
 
-                {/* Dashboard routes with persistent layout and maintenance check */}
+                {/* Dashboard routes menggunakan Wrapper baru */}
                 <Route
                   path="/dashboard"
                   element={
-                    <ProtectedRoute>
-                      <MaintenanceCheck>
-                        <DashboardLayout>
-                          <Dashboard />
-                        </DashboardLayout>
-                      </MaintenanceCheck>
-                    </ProtectedRoute>
+                    <DashboardRouteWrapper>
+                      <Dashboard />
+                    </DashboardRouteWrapper>
                   }
                 />
                 <Route
                   path="/profile"
                   element={
-                    <ProtectedRoute>
-                      <MaintenanceCheck>
-                        <DashboardLayout>
-                          <Profile />
-                        </DashboardLayout>
-                      </MaintenanceCheck>
-                    </ProtectedRoute>
+                    <DashboardRouteWrapper>
+                      <Profile /> 
+                    </DashboardRouteWrapper>
                   }
                 />
-                {/* <Route
-                  path="/report/:id"
-                  element={
-                    <ProtectedRoute>
-                      <MaintenanceCheck>
-                        <DashboardLayout>
-                          <ReportDetail />
-                        </DashboardLayout>
-                      </MaintenanceCheck>
-                    </ProtectedRoute>
-                  }
-                /> */}
-
                 <Route 
                   path="/export-reports" 
                   element={
-                    <ProtectedRoute>
-                      <MaintenanceCheck>
-                        <DashboardLayout>
-                          <ExportReports />
-                        </DashboardLayout>
-                      </MaintenanceCheck>
-                    </ProtectedRoute>
-                  } />
+                    <DashboardRouteWrapper>
+                      <ExportReports />
+                    </DashboardRouteWrapper>
+                  } 
+                />
                 {/* ADD ALL CUSTOM ROUTES ABOVE THE CATCH-ALL "*" ROUTE */}
                 <Route path="*" element={<NotFound />} />
               </Routes>

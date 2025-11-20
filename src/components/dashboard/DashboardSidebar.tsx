@@ -10,9 +10,10 @@ import { Avatar, AvatarFallback } from '@/components/ui/avatar';
 interface DashboardSidebarProps {
   userRole: 'staff' | 'approver' | 'admin';
   onCreateReport?: () => void;
+  onHomeClick?: () => void;
 }
 
-export const DashboardSidebar = ({ userRole, onCreateReport }: DashboardSidebarProps) => {
+export const DashboardSidebar = ({ userRole, onCreateReport, onHomeClick }: DashboardSidebarProps) => { // ✅ Use new prop  const navigate = useNavigate();
   const navigate = useNavigate();
   const location = useLocation();
   const { user } = useAuth();
@@ -54,6 +55,17 @@ export const DashboardSidebar = ({ userRole, onCreateReport }: DashboardSidebarP
 
   const isActive = (path: string) => location.pathname === path;
 
+  // ✅ NEW: Handler klik Home yang memprioritaskan refresh
+  const handleHomeClick = () => {
+    if (location.pathname === '/dashboard' && onHomeClick) {
+      // Jika sudah di dashboard dan ada fungsi refresh, panggil itu
+      onHomeClick(); 
+    } else {
+      // Jika tidak, navigasi seperti biasa
+      navigate('/dashboard');
+    }
+  };
+
   return (
     <aside className="hidden md:flex md:flex-col md:w-64 border-r bg-sidebar-background h-screen sticky top-0">
       <div className="p-6 border-b">
@@ -87,7 +99,7 @@ export const DashboardSidebar = ({ userRole, onCreateReport }: DashboardSidebarP
             "w-full justify-start",
             isActive('/dashboard') && "bg-sidebar-accent text-sidebar-accent-foreground"
           )}
-          onClick={() => navigate('/dashboard')}
+          onClick={handleHomeClick} // ✅ Gunakan handler baru
         >
           <Home className="h-5 w-5 mr-3" />
           Home

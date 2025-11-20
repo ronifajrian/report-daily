@@ -26,6 +26,9 @@ import {
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 
+// Konstanta KEY untuk localStorage
+const DRAFT_STORAGE_KEY = "report_draft_desc";
+
 interface CreateReportModalProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
@@ -37,7 +40,11 @@ export const CreateReportModal = ({ open, onOpenChange, onSuccess }: CreateRepor
   const { toast } = useToast();
   const { location, status: locationStatus, requestLocation, openPermissionHelp } = useLocation();
 
-  const [description, setDescription] = useState("");
+  // Initial state diambil dari localStorage jika ada (Lazy initialization)
+  const [description, setDescription] = useState(() => {
+    return localStorage.getItem(DRAFT_STORAGE_KEY) || "";
+  });
+
   const [files, setFiles] = useState<File[]>([]);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [focusedInput, setFocusedInput] = useState(false);
@@ -45,9 +52,33 @@ export const CreateReportModal = ({ open, onOpenChange, onSuccess }: CreateRepor
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
+  // 2. Effect untuk Auto-Save setiap kali description berubah
+  useEffect(() => {
+    if (description) {
+      localStorage.setItem(DRAFT_STORAGE_KEY, description);
+    } else {
+      // Jika kosong, hapus dari storage agar bersih
+      localStorage.removeItem(DRAFT_STORAGE_KEY);
+    }
+  }, [description]);
+
+  // Contoh logic tambahan di dalam useEffect mount
+  useEffect(() => {
+    const savedDraft = localStorage.getItem(DRAFT_STORAGE_KEY);
+    if (savedDraft) {
+      toast({
+        title: "Draft Restored",
+        description: "Text saved, but please re-select your files.",
+      });
+    }
+  }, []);
+
+  // 3. Update handleOpenChange agar LEBIH AMAN
   const handleOpenChange = (isOpen: boolean) => {
     if (!isOpen) {
-      setDescription("");
+      // UX CHOICE: Jangan hapus description di sini. 
+      // Biarkan tersimpan di draft kalau user tidak sengaja menutup modal.
+      // Kita hanya reset files dan focus.
       setFiles([]);
       setFocusedInput(false);
     }
@@ -137,9 +168,15 @@ export const CreateReportModal = ({ open, onOpenChange, onSuccess }: CreateRepor
         }));
       }
 
+      // 4. HAPUS DRAFT SETELAH SUKSES
+      localStorage.removeItem(DRAFT_STORAGE_KEY);
+      setDescription(""); // Reset state
+      setFiles([]); // Reset files
+
       toast({ title: "Report Created", description: "Your report has been submitted successfully." });
       onSuccess();
-      handleOpenChange(false);
+      // Gunakan onOpenChange langsung agar tidak memanggil logic reset kita sendiri yg mungkin conflict
+      onOpenChange(false);
     } catch (error: any) {
       toast({ title: "Failed", description: error.message, variant: "destructive" });
     } finally {

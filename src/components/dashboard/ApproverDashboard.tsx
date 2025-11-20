@@ -4,10 +4,13 @@ import { useToast } from '@/hooks/use-toast';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { FileCheck, Clock, XCircle, FileText } from 'lucide-react';
 import { InfiniteReportsList } from './InfiniteReportsList';
-import { Report } from './StaffDashboard';
 
-const ApproverDashboard = () => {
-  const { toast } = useToast();
+// ✅ Interface untuk prop yang diterima dari Dashboard.tsx
+interface ApproverDashboardProps {
+  onRefreshTriggerRegistration: (refreshFn: () => void) => void;
+}
+
+const ApproverDashboard = ({ onRefreshTriggerRegistration }: ApproverDashboardProps) => {  const { toast } = useToast();
   const [stats, setStats] = useState({
     total: 0,
     approved: 0,
@@ -130,6 +133,7 @@ const ApproverDashboard = () => {
           showAuthor={true}
           allUsers={allUsers}
           userRole="approver"
+          onRefreshTriggerRegistration={onRefreshTriggerRegistration}
         />
       </div>
     </div>

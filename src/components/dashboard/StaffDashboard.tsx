@@ -18,7 +18,12 @@ export interface Report {
   };
 }
 
-const StaffDashboard = () => {
+// ✅ Interface untuk prop yang diterima dari Dashboard.tsx
+interface StaffDashboardProps {
+  onRefreshTriggerRegistration: (refreshFn: () => void) => void;
+}
+
+const StaffDashboard = ({ onRefreshTriggerRegistration }: StaffDashboardProps) => {
   const { user } = useAuth();
 
   return (
@@ -30,6 +35,8 @@ const StaffDashboard = () => {
           userId={user?.id}
           showAuthor={true}
           userRole="staff"
+          // ✅ FIX: Teruskan prop ke InfiniteReportsList
+          onRefreshTriggerRegistration={onRefreshTriggerRegistration}
         />
       </div>
       

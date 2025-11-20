@@ -13,6 +13,10 @@ import { Loader2, User, Lock, LogOut } from 'lucide-react';
 import { z } from 'zod';
 import { ProfileSkeleton } from '@/components/SkeletonProfile'; 
 
+interface ProfileProps {
+  onRefreshTriggerRegistration?: (refreshFn: () => void) => void;
+}
+
 const profileSchema = z.object({
   full_name: z.string().min(1, { message: 'Full name is required' }).max(100),
   phone: z.string().max(20).optional(),
@@ -28,7 +32,7 @@ const passwordSchema = z.object({
   path: ["confirmPassword"],
 });
 
-const Profile = () => {
+const Profile = ({ onRefreshTriggerRegistration }: ProfileProps) => {
   const { user, userRole, signOut, loading: authLoading } = useAuth();
   const { toast } = useToast();
   const navigate = useNavigate();

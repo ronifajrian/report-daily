@@ -5,17 +5,23 @@ import { cn } from '@/lib/utils';
 interface MobileBottomNavProps {
   userRole: 'staff' | 'approver' | 'admin';
   onCreateReport?: () => void;
+  onHomeClick?: () => void;
 }
 
-export const MobileBottomNav = ({ userRole, onCreateReport }: MobileBottomNavProps) => {
-  const navigate = useNavigate();
+export const MobileBottomNav = ({ userRole, onCreateReport, onHomeClick }: MobileBottomNavProps) => {  const navigate = useNavigate();
   const location = useLocation();
 
   const isActive = (path: string) => location.pathname === path;
   
   const handleHomeClick = () => {
     if (location.pathname === '/dashboard') {
-      window.scrollTo({ top: 0, behavior: 'smooth' });
+      if (onHomeClick) {
+        // Jika sudah di dashboard dan ada fungsi refresh, panggil itu
+        onHomeClick();
+      } else {
+        // Fallback: gulir ke atas jika tidak ada fungsi refresh
+        window.scrollTo({ top: 0, behavior: 'smooth' });
+      }
     } else {
       navigate('/dashboard');
     }

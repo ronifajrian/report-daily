@@ -11,12 +11,16 @@ import { Switch } from '@/components/ui/switch';
 import { Label } from '@/components/ui/label';
 import { Loader2, FileText, Users, UserCheck, Clock, Settings } from 'lucide-react';
 
+// ✅ Interface untuk prop yang diterima dari Dashboard.tsx
+interface AdminDashboardProps {
+  onRefreshTriggerRegistration: (refreshFn: () => void) => void;
+}
+
 // ✅ OPTIMIZATION 1: Shared stats cache
 const statsCache = { data: null as any, timestamp: 0 };
 const STATS_CACHE_TTL = 30000; // 30 seconds
 
-const AdminDashboard = () => {
-  const { toast } = useToast();
+const AdminDashboard = ({ onRefreshTriggerRegistration }: AdminDashboardProps) => {  const { toast } = useToast();
   const [loading, setLoading] = useState(true);
   const [totalUsers, setTotalUsers] = useState(0);
   const [activeStaff, setActiveStaff] = useState(0);
@@ -321,6 +325,7 @@ const AdminDashboard = () => {
               showAuthor={true}
               allUsers={allUsers}
               userRole="admin"
+              onRefreshTriggerRegistration={onRefreshTriggerRegistration}
             />
           )}
         </TabsContent>

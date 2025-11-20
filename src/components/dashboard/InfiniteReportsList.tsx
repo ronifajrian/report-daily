@@ -23,6 +23,7 @@ interface InfiniteReportsListProps {
   showAuthor?: boolean;
   allUsers?: Array<{ id: string; full_name: string }>;
   userRole?: 'staff' | 'approver' | 'admin';
+  onRefreshTriggerRegistration?: (refreshFn: () => void) => void;
 }
 
 // ✅ OPTIMIZATION 1: Shared fetch cache to prevent duplicate requests
@@ -36,7 +37,8 @@ export const InfiniteReportsList = ({
   userId, 
   showAuthor = false, 
   allUsers = [],
-  userRole 
+  userRole,
+  onRefreshTriggerRegistration 
 }: InfiniteReportsListProps) => {
   const { toast } = useToast();
   const { signOut } = useAuth();
@@ -70,6 +72,10 @@ export const InfiniteReportsList = ({
 
   const scrollTimeoutRef = useRef<NodeJS.Timeout>();
   const [isScrolling, setIsScrolling] = useState(false);
+
+  // ✅ NEW: Anti-spam refresh
+  const lastRefreshTimeRef = useRef(0);
+  const REFRESH_COOLDOWN = 3000; // 3 seconds
 
   // ✅ OPTIMIZATION 3: Debounced scroll detection
   useEffect(() => {
@@ -244,6 +250,61 @@ export const InfiniteReportsList = ({
     inflightRequests.set(cacheKey, fetchPromise);
     return fetchPromise;
   }, [userId, statusFilter, userFilter, toast, signOut]);
+
+  // ✅ NEW: Fungsi untuk Hard Refresh
+  const hardRefresh = useCallback(() => {
+    // Only proceed if not already loading a refresh
+    if (loadingRef.current) return;
+
+    // Reset list state
+    setReports([]);
+    setPage(1);
+    pageRef.current = 1;
+    setHasMore(true);
+    hasMoreRef.current = true;
+    newReportsBufferRef.current = [];
+    setNewCount(0);
+    setShowNewBanner(false);
+    
+    // Clear cache
+    fetchCache.clear();
+
+    // Fetch fresh reports
+    fetchReports(1, true);
+    
+    // Smooth scroll to top
+    window.scrollTo({ top: 0, behavior: 'smooth' }); 
+  }, [fetchReports]);
+
+  // ✅ NEW: Anti-spam wrapper untuk Hard Refresh
+  const safeHardRefresh = useCallback(() => {
+    const now = Date.now();
+    if (now - lastRefreshTimeRef.current < REFRESH_COOLDOWN) {
+      // toast({
+      //   title: "Tunggu Sebentar!",
+      //   description: "Laporan baru saja diperbarui. Coba lagi dalam beberapa detik.",
+      //   variant: "default", 
+      // });
+      return;
+    }
+    
+    lastRefreshTimeRef.current = now;
+    hardRefresh();
+    
+    // Optional: Show a success toast for user feedback
+    // toast({
+    //   title: "Memperbarui Laporan...",
+    //   description: "Daftar laporan sedang dimuat ulang.",
+    //   duration: 1000
+    // });
+  }, [hardRefresh, toast]);
+
+  // ✅ NEW: Expose the safe refresh function to parent
+  useEffect(() => {
+    if (onRefreshTriggerRegistration) {
+      onRefreshTriggerRegistration(safeHardRefresh);
+    }
+  }, [onRefreshTriggerRegistration, safeHardRefresh]);
 
   useEffect(() => {
     setReports([]);
