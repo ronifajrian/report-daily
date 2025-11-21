@@ -1,5 +1,4 @@
-// src/components/dashboard/ReportCard.tsx - OPTIMIZED
-
+// src/components/dashboard/ReportCard.tsx - UPDATED FOR ROUTE NAVIGATION
 import { Card, CardContent } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { Report } from './StaffDashboard';
@@ -10,7 +9,8 @@ import { ScrollArea, ScrollBar } from '@/components/ui/scroll-area';
 import { AttachmentPreview } from './AttachmentPreview';
 import { AttachmentCarouselPreview } from './AttachmentCarouselPreview';
 import { Avatar, AvatarFallback } from '@/components/ui/avatar';
-import { formatRelativeTime, getInitials } from '@/lib/utils'; // [CHANGE]
+import { formatRelativeTime, getInitials } from '@/lib/utils';
+import { useNavigate, useLocation } from 'react-router-dom'; // ✅ NEW
 
 interface ReportFile {
   id: string;
@@ -23,16 +23,13 @@ interface ReportFile {
 
 interface ReportCardProps {
   report: Report;
-  onClick: () => void;
   showAuthor?: boolean;
   isNew?: boolean;
 }
 
-// ✅ OPTIMIZATION 1: Shared cache untuk attachments (cross-component)
 const attachmentsCache = new Map<string, { data: ReportFile[]; timestamp: number }>();
-const CACHE_TTL = 60000; // 1 minute cache
+const CACHE_TTL = 60000;
 
-// ✅ OPTIMIZATION 2: Debounce utility
 const debounce = (fn: Function, delay: number) => {
   let timeoutId: NodeJS.Timeout;
   return (...args: any[]) => {
@@ -41,7 +38,11 @@ const debounce = (fn: Function, delay: number) => {
   };
 };
 
-export const ReportCard = ({ report, onClick, showAuthor = false, isNew = false }: ReportCardProps) => {
+export const ReportCard = ({ report, showAuthor = false, isNew = false }: ReportCardProps) => {
+  // ✅ NEW: Use navigation instead of onClick callback
+  const navigate = useNavigate();
+  const location = useLocation();
+
   const [previewOpen, setPreviewOpen] = useState(false);
   const [previewInitialIndex, setPreviewInitialIndex] = useState(0);
   const [attachments, setAttachments] = useState<ReportFile[]>([]);
@@ -51,7 +52,6 @@ export const ReportCard = ({ report, onClick, showAuthor = false, isNew = false 
   const cardRef = useRef<HTMLDivElement>(null);
   const fetchedRef = useRef(false);
 
-  // ✅ OPTIMIZATION 3: IntersectionObserver untuk lazy loading
   useEffect(() => {
     if (!cardRef.current) return;
 
@@ -62,7 +62,7 @@ export const ReportCard = ({ report, onClick, showAuthor = false, isNew = false 
         }
       },
       {
-        rootMargin: '200px', // Load 200px sebelum terlihat
+        rootMargin: '200px',
         threshold: 0.01,
       }
     );
@@ -74,12 +74,10 @@ export const ReportCard = ({ report, onClick, showAuthor = false, isNew = false 
     };
   }, []);
 
-  // ✅ OPTIMIZATION 4: Fetch attachments hanya saat visible + with cache
   const fetchAttachments = useCallback(async () => {
     if (fetchedRef.current) return;
     fetchedRef.current = true;
 
-    // Check cache first
     const cached = attachmentsCache.get(report.id);
     if (cached && Date.now() - cached.timestamp < CACHE_TTL) {
       setAttachments(cached.data);
@@ -90,20 +88,18 @@ export const ReportCard = ({ report, onClick, showAuthor = false, isNew = false 
     try {
       const { data, error } = await supabase
         .from('report_files')
-        .select('id, file_url, storage_path, file_name, file_type, file_size') // ✅ Hanya field penting
+        .select('id, file_url, storage_path, file_name, file_type, file_size')
         .eq('report_id', report.id)
         .order('created_at', { ascending: true })
-        .limit(5); // ✅ Limit untuk preview (max 5)
+        .limit(5);
       
       if (error) throw error;
 
       const files = data || [];
       setAttachments(files);
 
-      // Cache result
       attachmentsCache.set(report.id, { data: files, timestamp: Date.now() });
 
-      // ✅ OPTIMIZATION 5: Auto cleanup old cache
       if (attachmentsCache.size > 50) {
         const now = Date.now();
         for (const [key, value] of attachmentsCache.entries()) {
@@ -121,7 +117,6 @@ export const ReportCard = ({ report, onClick, showAuthor = false, isNew = false 
 
   useEffect(() => {
     if (isVisible) {
-      // ✅ OPTIMIZATION 6: Debounce fetch untuk batch loading
       const debouncedFetch = debounce(fetchAttachments, 100);
       debouncedFetch();
     }
@@ -151,22 +146,27 @@ export const ReportCard = ({ report, onClick, showAuthor = false, isNew = false 
     setPreviewOpen(true);
   }, []);
 
-return (
+  // ✅ NEW: Navigate to report detail route
+  const handleCardClick = useCallback(() => {
+    navigate(`/dashboard/report/${report.id}`, {
+      state: { backgroundLocation: location }
+    });
+  }, [navigate, report.id, location]);
+
+  return (
     <>
       <Card 
         ref={cardRef}
         className={`cursor-pointer hover:shadow-md transition-all hover:border-primary/20 animate-fade-in ${
           isNew ? 'border-l-4 border-l-primary' : ''
         }`}
-        onClick={onClick}
+        onClick={handleCardClick} // ✅ CHANGED: Use navigation instead of callback
       >
         <CardContent className="p-4 space-y-3">
           <div className="flex items-start justify-between gap-2">
             
-            {/* START: Timeline Header Style (Instagram-like) */}
-            <div className="flex flex-1 min-w-0 items-start gap-3"> {/* Kontainer untuk Avatar + Info */}
+            <div className="flex flex-1 min-w-0 items-start gap-3">
               
-              {/* Profile Icon/Avatar (Inisial) */}
               {showAuthor && report.profiles && (
                 <Avatar className="h-9 w-9 flex-shrink-0">
                   <AvatarFallback className='text-sm bg-secondary text-secondary-foreground'>
@@ -175,22 +175,18 @@ return (
                 </Avatar>
               )}
 
-              <div className="flex-1 min-w-0 pt-0.5"> {/* Kontainer untuk Nama dan Info Baris Kedua */}
-                {/* Nama Pelapor */}
+              <div className="flex-1 min-w-0 pt-0.5">
                 {showAuthor && report.profiles && (
                   <p className="font-semibold text-sm truncate leading-none">
                     {report.profiles.full_name}
                   </p>
                 )}
 
-                {/* Waktu dan Lokasi (di bawah nama) */}
                 <p className="text-xs text-muted-foreground flex items-center gap-1 flex-wrap mt-1">
-                  {/* Waktu */}
                   <span className="whitespace-nowrap">
                     {formatRelativeTime(report.created_at)} 
                   </span>
                   
-                  {/* Ikon Lokasi */}
                   {report.latitude && report.longitude && (
                     <>
                       <span className="mx-1">•</span>
@@ -203,9 +199,7 @@ return (
                 </p>
               </div>
             </div>
-            {/* END: Timeline Header Style */}
             
-            {/* Badge Status (Tetap di kanan) */}
             <div className="flex-shrink-0 pt-1">
               {getStatusBadge(report.status)}
             </div>
@@ -215,7 +209,6 @@ return (
             {report.description}
           </p>
 
-          {/* ✅ OPTIMIZATION 7: Conditional rendering - hanya tampilkan jika ada data */}
           {isVisible && !loadingAttachments && attachments.length > 0 && (
             <ScrollArea className="w-full whitespace-nowrap">
               <div className="flex gap-2 pb-2">
@@ -243,7 +236,6 @@ return (
             </ScrollArea>
           )}
 
-          {/* ✅ Loading skeleton untuk attachments */}
           {isVisible && loadingAttachments && (
             <div className="flex gap-2">
               {[1, 2, 3].map((i) => (
@@ -264,7 +256,6 @@ return (
         </CardContent>
       </Card>
 
-      {/* ✅ OPTIMIZATION 8: Lazy load carousel hanya saat dibuka */}
       {previewOpen && (
         <AttachmentCarouselPreview
           files={attachments}
@@ -276,23 +267,3 @@ return (
     </>
   );
 };
-
-/* 
-✅ OPTIMIZATIONS SUMMARY:
-1. Shared cache across components - Prevents duplicate fetches
-2. Debounce utility - Batches multiple fetch requests
-3. IntersectionObserver - Lazy loads only visible cards
-4. Cache with TTL (1 min) - Reduces DB queries
-5. Auto cache cleanup - Prevents memory leaks
-6. Debounced fetch - Smooth batch loading
-7. Conditional rendering - Only renders when data exists
-8. Lazy carousel - Only loads when opened
-9. Field selection - Reduces payload
-10. Limit attachments - Max 5 for preview
-
-EXPECTED IMPROVEMENTS:
-- Initial load attachments: ↓ 0% (lazy loaded)
-- Duplicate fetches: ↓ 90%
-- Memory usage: ↓ 40%
-- Scroll performance: ↑ 60%
-*/
